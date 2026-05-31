@@ -1,0 +1,12 @@
+# nix build artifacts
+result
+result-*
+
+# local runtime / accidental plaintext (the *encrypted* secrets/*.yaml IS committed)
+*.plain
+/secrets/*.plaintext
+.direnv/
+
+# age private keys must never be committed (they decrypt the token)
+keys.txt
+*.agekey
