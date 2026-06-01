@@ -67,10 +67,9 @@ in
     ];
 
     systemd.user.services.telegram-bot = {
-      Unit = {
-        Description = "Telegram bot daemon";
-        After = [ "network-online.target" ];
-      };
+      # No network-online.target ordering: it isn't meaningful for user
+      # services, and the daemon already retries on network errors anyway.
+      Unit.Description = "Telegram bot daemon";
       Install.WantedBy = [ "default.target" ];
       Service = {
         ExecStart = "${cfg.package}/bin/tg-bot";

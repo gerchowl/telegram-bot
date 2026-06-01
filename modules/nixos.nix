@@ -227,6 +227,9 @@ in
         RestrictAddressFamilies = [
           "AF_INET"
           "AF_INET6"
+          # AF_UNIX: needed by the Rust daemon's command timeout (the
+          # wait-timeout crate uses a UnixStream self-pipe). Harmless for bash.
+          "AF_UNIX"
         ];
         RestrictNamespaces = true;
         LockPersonality = true;

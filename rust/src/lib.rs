@@ -218,9 +218,22 @@ impl Tg {
         if silent {
             push_field(&mut body, boundary, "disable_notification", "true");
         }
+        // Sanitise the filename before it goes into the Content-Disposition
+        // header: a basename may contain `"`, CR, LF or `\` (header injection /
+        // multipart smuggling). Keep it to a safe set.
+        let safe_name: String = filename
+            .chars()
+            .map(|c| {
+                if c == '"' || c == '\\' || c.is_control() {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect();
         body.extend_from_slice(
             format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{safe_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
             )
             .as_bytes(),
         );

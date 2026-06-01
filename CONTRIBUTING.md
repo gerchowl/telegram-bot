@@ -60,7 +60,7 @@ Beyond the gate above, separate workflows run:
   cache at app.cachix.org, add a `CACHIX_AUTH_TOKEN` repo secret, and uncomment the
   `nixConfig` block in `flake.nix` with the cache's real public key. On your own machine:
   `cachix use gerchowl`.
-- **Reproducibility**: each release attaches a `vendor.tar.zst` (`cargo vendor` output) so
+- **Reproducibility**: each release attaches a `vendor.tar.gz` (`cargo vendor` output) so
   the Rust build stays buildable even if a crate is later yanked from crates.io.
 
 ## Pre-commit hooks

@@ -14,7 +14,7 @@ jobs:
     steps:
       # Maintains a release PR (version bump + CHANGELOG) from Conventional
       # Commits; merging it tags vX.Y.Z and cuts a GitHub release.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -24,23 +24,39 @@ jobs:
       # When a release is cut, archive the exact Rust dependency sources
       # (cargo vendor) and attach them — so the build stays reproducible
       # long-term even if a crate is later yanked/removed from crates.io.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         if: ${{ steps.release.outputs.release_created }}
-      - uses: cachix/install-nix-action@v30
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: ${{ steps.release.outputs.release_created }}
         with:
           extra_nix_config: experimental-features = nix-command flakes
-      - name: Vendor crate sources and attach to the release
+      - name: Vendor crate sources + third-party notices, attach to the release
         if: ${{ steps.release.outputs.release_created }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release.outputs.tag_name }}
         run: |
-          nix shell nixpkgs#cargo nixpkgs#zstd --command bash -euo pipefail -c '
-            cd rust
-            cargo vendor vendor > vendor-config.toml
-            mkdir -p .cargo && mv vendor-config.toml .cargo/config.toml
-            cd ..
-            tar --use-compress-program="zstd -19" -cf vendor.tar.zst -C rust .
-          '
-          gh release upload "$TAG" vendor.tar.zst --clobber
+          cargobin="$(nix build nixpkgs#cargo --no-link --print-out-paths)/bin"
+          export PATH="$cargobin:$PATH"
+          cd rust
+          cargo vendor vendor > vendor-config.toml
+          mkdir -p .cargo && mv vendor-config.toml .cargo/config.toml
+          # Collect dependency license notices: the binaries statically link
+          # these crates, so MIT (etc.) requires shipping their notices.
+          {
+            echo "Third-party license notices — telegram-bot $TAG"
+            echo "Generated from cargo vendor; one section per dependency crate."
+            echo
+            for d in vendor/*/; do
+              name=$(basename "$d")
+              for f in "$d"LICENSE* "$d"LICENCE* "$d"COPYING* "$d"NOTICE* "$d"license* "$d"licence*; do
+                [ -f "$f" ] || continue
+                printf '===== %s (%s) =====\n' "$name" "$(basename "$f")"
+                cat "$f"
+                printf '\n'
+              done
+            done
+          } > ../THIRD-PARTY-LICENSES.txt
+          cd ..
+          tar -czf vendor.tar.gz -C rust .
+          gh release upload "$TAG" vendor.tar.gz THIRD-PARTY-LICENSES.txt --clobber
