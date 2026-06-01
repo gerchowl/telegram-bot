@@ -26,7 +26,7 @@ jobs:
       # long-term even if a crate is later yanked/removed from crates.io.
       - uses: actions/checkout@v4
         if: ${{ steps.release.outputs.release_created }}
-      - uses: cachix/install-nix-action@v30
+      - uses: cachix/install-nix-action@v31
         if: ${{ steps.release.outputs.release_created }}
         with:
           extra_nix_config: experimental-features = nix-command flakes
