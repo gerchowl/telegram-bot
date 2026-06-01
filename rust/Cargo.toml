@@ -15,7 +15,7 @@ repository = "https://github.com/gerchowl/telegram-bot"
 # Blocking HTTP with native-tls (the most reliable TLS path under Nix). The
 # Telegram API surface we touch is tiny, so we hand-roll the client rather than
 # pull in a full framework (teloxide/frankenstein) — keeps the binary small.
-ureq = { version = "2", default-features = false, features = [
+ureq = { version = "3", default-features = false, features = [
   "native-tls",
   "json",
 ] }
