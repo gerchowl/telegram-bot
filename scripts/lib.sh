@@ -27,7 +27,7 @@ tg_resolve_token() {
     return 0
   fi
   if [ -n "${TELEGRAM_BOT_TOKEN_FILE:-}" ] && [ -f "${TELEGRAM_BOT_TOKEN_FILE}" ]; then
-    tr -d '\r\n' < "$TELEGRAM_BOT_TOKEN_FILE"
+    tr -d '\r\n' <"$TELEGRAM_BOT_TOKEN_FILE"
     return 0
   fi
   if [ -n "${TELEGRAM_BOT_SOPS_FILE:-}" ]; then

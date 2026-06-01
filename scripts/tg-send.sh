@@ -32,15 +32,40 @@ main() {
   local chat="" parse_mode="" silent=0 file="" config="" message=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      -c|--chat)       chat="$2"; shift 2;;
-      -p|--parse-mode) parse_mode="$2"; shift 2;;
-      -s|--silent)     silent=1; shift;;
-      -f|--file)       file="$2"; shift 2;;
-      --config)        config="$2"; shift 2;;
-      -h|--help)       usage; return 0;;
-      --)              shift; break;;
-      -*)              echo "tg-send: unknown option: $1" >&2; usage; return 2;;
-      *)               break;;
+      -c | --chat)
+        chat="$2"
+        shift 2
+        ;;
+      -p | --parse-mode)
+        parse_mode="$2"
+        shift 2
+        ;;
+      -s | --silent)
+        silent=1
+        shift
+        ;;
+      -f | --file)
+        file="$2"
+        shift 2
+        ;;
+      --config)
+        config="$2"
+        shift 2
+        ;;
+      -h | --help)
+        usage
+        return 0
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        echo "tg-send: unknown option: $1" >&2
+        usage
+        return 2
+        ;;
+      *) break ;;
     esac
   done
 
@@ -70,13 +95,19 @@ main() {
 send_document() {
   local chat="$1" file="$2" caption="$3" parse_mode="$4" silent="$5" tok resp
   tok="$(tg_resolve_token)" || return $?
-  [ -n "$chat" ] || { echo "tg-send: no chat id" >&2; return 2; }
+  [ -n "$chat" ] || {
+    echo "tg-send: no chat id" >&2
+    return 2
+  }
 
   local args=(--silent --show-error --max-time 120 -F "chat_id=${chat}")
   if [ "$file" = "-" ]; then
     args+=(-F "document=@-;filename=stdin.txt")
   else
-    [ -f "$file" ] || { echo "tg-send: no such file: $file" >&2; return 2; }
+    [ -f "$file" ] || {
+      echo "tg-send: no such file: $file" >&2
+      return 2
+    }
     args+=(-F "document=@${file}")
   fi
   [ -n "$caption" ] && args+=(-F "caption=${caption}")
@@ -84,7 +115,9 @@ send_document() {
   [ "$silent" = 1 ] && args+=(-F "disable_notification=true")
 
   resp="$(curl "${args[@]}" "$TG_API_BASE/bot${tok}/sendDocument")" || {
-    echo "tg-send: network error" >&2; return 1; }
+    echo "tg-send: network error" >&2
+    return 1
+  }
   if [ "$(jq -r '.ok' <<<"$resp")" != "true" ]; then
     echo "tg-send: API error: $(jq -r '.description // "unknown error"' <<<"$resp")" >&2
     return 1

@@ -1,0 +1,37 @@
+# Pre-commit hooks. Works with both `prek` (https://github.com/j178/prek) and
+# the original `pre-commit`. Install with:  prek install   (or: pre-commit install)
+# The local hooks expect the dev tools on PATH — run inside `nix develop`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files # guards against committing a key/secret blob
+      - id: check-yaml
+      - id: check-json
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks # secret scan before the commit leaves your machine
+
+  - repo: local
+    hooks:
+      - id: nixfmt
+        name: nixfmt
+        entry: nixfmt
+        language: system
+        files: \.nix$
+      - id: shfmt
+        name: shfmt
+        entry: shfmt -w -i 2 -ci
+        language: system
+        files: ^(scripts/.*\.sh|tests/.*\.sh|commands/(ping|status))$
+      - id: flake-check
+        name: nix flake check (fmt · lint · licenses · shellcheck · e2e)
+        entry: nix flake check
+        language: system
+        pass_filenames: false
+        stages: [pre-push] # heavier — runs on push, not every commit

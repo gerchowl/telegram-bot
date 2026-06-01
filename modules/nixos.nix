@@ -1,32 +1,51 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Lars Gerchow
 self:
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
-  inherit (lib) mkEnableOption mkOption mkIf types mkPackageOption
-    mapAttrsToList concatStringsSep optionalAttrs optionalString;
+  inherit (lib)
+    mkEnableOption
+    mkOption
+    mkIf
+    types
+    mkPackageOption
+    mapAttrsToList
+    concatStringsSep
+    optionalAttrs
+    ;
   cfg = config.services.telegram-bot;
 
   # Build a commands directory from the `commands` attrset, if given.
   builtCommandsDir =
     if cfg.commands != { } then
-      pkgs.linkFarm "telegram-bot-commands" (mapAttrsToList
-        (name: script: {
+      pkgs.linkFarm "telegram-bot-commands" (
+        mapAttrsToList (name: script: {
           inherit name;
           # Point straight at the executable; tg-bot runs `$dir/$name` directly.
-          path = "${pkgs.writeShellApplication {
-            inherit name;
-            runtimeInputs = cfg.commandRuntimeInputs;
-            text = script;
-          }}/bin/${name}";
-        })
-        cfg.commands)
-    else null;
+          path = "${
+            pkgs.writeShellApplication {
+              inherit name;
+              runtimeInputs = cfg.commandRuntimeInputs;
+              text = script;
+            }
+          }/bin/${name}";
+        }) cfg.commands
+      )
+    else
+      null;
 
   commandsDir =
-    if builtCommandsDir != null then builtCommandsDir
-    else if cfg.commandsDir != null then cfg.commandsDir
-    else null;
+    if builtCommandsDir != null then
+      builtCommandsDir
+    else if cfg.commandsDir != null then
+      cfg.commandsDir
+    else
+      null;
 in
 {
   options.services.telegram-bot = {
@@ -163,7 +182,7 @@ in
     users.users = mkIf (cfg.user == "telegram-bot") {
       telegram-bot = {
         isSystemUser = true;
-        group = cfg.group;
+        inherit (cfg) group;
         description = "Telegram bot daemon";
       };
     };
@@ -205,7 +224,10 @@ in
         ProtectKernelTunables = true;
         ProtectKernelModules = true;
         ProtectControlGroups = true;
-        RestrictAddressFamilies = [ "AF_INET" "AF_INET6" ];
+        RestrictAddressFamilies = [
+          "AF_INET"
+          "AF_INET6"
+        ];
         RestrictNamespaces = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;

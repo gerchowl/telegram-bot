@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flake-check:
+    name: nix flake check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Covers x86_64-linux, aarch64-linux and aarch64-darwin.
+        # `nix flake check` skips incompatible systems, so the matrix is the
+        # only way to actually exercise Darwin + ARM.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+      # One command runs shellcheck (build-time), the format/lint/licenses
+      # checks, module evaluation, and the hermetic e2e (incl. the RCE
+      # regression tests).
+      - run: nix flake check -L

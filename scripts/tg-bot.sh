@@ -15,14 +15,14 @@
 #
 # Built-in commands (always available): /start /id /help
 
-TG_LIMIT=3900   # leave headroom under Telegram's 4096-char message cap
+TG_LIMIT=3900 # leave headroom under Telegram's 4096-char message cap
 
 # Is chat id "$1" in the allowlist? Empty allowlist ⇒ no one is authorized.
 tg_is_allowed() {
   local id="$1" list=" ${TELEGRAM_ALLOWED_CHAT_IDS:-} "
   list="${list//,/ }"
   [ -n "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ] || return 1
-  case " $list " in *" $id "*) return 0;; *) return 1;; esac
+  case " $list " in *" $id "*) return 0 ;; *) return 1 ;; esac
 }
 
 tg_help_text() {
@@ -52,7 +52,8 @@ tg_run_command() {
   case "$cmd" in
     '' | *[!A-Za-z0-9_-]*)
       tg_send_message "$chat" "❓ Unknown command: /$cmd  (try /help)"
-      return 0 ;;
+      return 0
+      ;;
   esac
   if [ -z "$dir" ] || [ ! -x "$dir/$cmd" ]; then
     tg_send_message "$chat" "❓ Unknown command: /$cmd  (try /help)"
@@ -65,8 +66,8 @@ tg_run_command() {
   IFS=' ' read -r -a argv <<<"$rest" || true
   local out rc
   set +e
-  out="$( cd "$dir" && TG_CHAT_ID="$chat" TG_COMMAND="$cmd" \
-            timeout "${TELEGRAM_COMMAND_TIMEOUT:-60}" "./$cmd" "${argv[@]}" 2>&1 )"
+  out="$(cd "$dir" && TG_CHAT_ID="$chat" TG_COMMAND="$cmd" \
+    timeout "${TELEGRAM_COMMAND_TIMEOUT:-60}" "./$cmd" "${argv[@]}" 2>&1)"
   rc=$?
   set -e
   [ -n "$out" ] || out="(/$cmd exited $rc with no output)"
@@ -79,19 +80,28 @@ tg_handle_update() {
   chat="$(jq -r '.message.chat.id // empty' <<<"$upd")"
   text="$(jq -r '.message.text // empty' <<<"$upd")"
   [ -n "$chat" ] && [ -n "$text" ] || return 0
-  case "$text" in /*) ;; *) return 0;; esac   # only react to /commands
+  case "$text" in /*) ;; *) return 0 ;; esac # only react to /commands
 
-  cmd="${text%%[[:space:]]*}"   # leading token incl. slash
-  cmd="${cmd#/}"                # strip slash
-  cmd="${cmd%%@*}"              # strip @botname (groups append it)
+  cmd="${text%%[[:space:]]*}" # leading token incl. slash
+  cmd="${cmd#/}"              # strip slash
+  cmd="${cmd%%@*}"            # strip @botname (groups append it)
   rest="${text#/"$cmd"}"
-  rest="${rest#@*[[:space:]]}"  # tolerate /cmd@bot args
+  rest="${rest#@*[[:space:]]}" # tolerate /cmd@bot args
   rest="${rest# }"
 
   case "$cmd" in
-    start) tg_send_message "$chat" "👋 Online. /help for commands. This chat id is $chat."; return 0;;
-    id)    tg_send_message "$chat" "chat id: $chat"; return 0;;
-    help)  tg_send_message "$chat" "$(tg_help_text)"; return 0;;
+    start)
+      tg_send_message "$chat" "👋 Online. /help for commands. This chat id is $chat."
+      return 0
+      ;;
+    id)
+      tg_send_message "$chat" "chat id: $chat"
+      return 0
+      ;;
+    help)
+      tg_send_message "$chat" "$(tg_help_text)"
+      return 0
+      ;;
   esac
 
   if [ "${TELEGRAM_POST_ONLY:-1}" = 1 ]; then
@@ -110,7 +120,7 @@ main() {
   tg_load_config
   local tok
   tok="$(tg_resolve_token)" || exit $?
-  export TELEGRAM_BOT_TOKEN="$tok"   # cache so replies don't re-decrypt sops each time
+  export TELEGRAM_BOT_TOKEN="$tok" # cache so replies don't re-decrypt sops each time
 
   local state_dir offset_file offset resp n i uid
   state_dir="${TELEGRAM_BOT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/telegram-bot}"
@@ -126,19 +136,26 @@ main() {
     resp="$(curl --silent --show-error --max-time 70 "$TG_API_BASE/bot${tok}/getUpdates?timeout=50&offset=${offset}")"
     local curl_rc=$?
     set -e
-    if [ "$curl_rc" -ne 0 ]; then sleep 3; continue; fi
+    if [ "$curl_rc" -ne 0 ]; then
+      sleep 3
+      continue
+    fi
     if [ "$(jq -r '.ok // false' <<<"$resp")" != "true" ]; then
       echo "tg-bot: getUpdates error: $(jq -r '.description // "unknown"' <<<"$resp")" >&2
-      sleep 5; continue
+      sleep 5
+      continue
     fi
     n="$(jq '.result | length' <<<"$resp")"
     [ "${n:-0}" -gt 0 ] || continue
-    for (( i=0; i<n; i++ )); do
+    for ((i = 0; i < n; i++)); do
       tg_handle_update "$(jq -c ".result[$i]" <<<"$resp")"
       uid="$(jq -r ".result[$i].update_id" <<<"$resp")"
       case "$uid" in
-        '' | *[!0-9]*) ;;                                  # ignore non-numeric; never crash the loop
-        *) offset=$((uid + 1)); echo "$offset" > "$offset_file" ;;
+        '' | *[!0-9]*) ;; # ignore non-numeric; never crash the loop
+        *)
+          offset=$((uid + 1))
+          echo "$offset" >"$offset_file"
+          ;;
       esac
     done
   done

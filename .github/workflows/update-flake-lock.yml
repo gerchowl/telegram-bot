@@ -1,0 +1,28 @@
+name: update-flake-lock
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1" # Mondays 04:00 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  lockfile:
+    name: update flake.lock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - uses: DeterminateSystems/update-flake-lock@main
+        with:
+          pr-title: "chore: update flake.lock"
+          pr-labels: dependencies
+          # Note: PRs opened with GITHUB_TOKEN do not themselves trigger CI.
+          # Re-run CI manually on the PR, or swap in a PAT if you want it automatic.
+          token: ${{ secrets.GITHUB_TOKEN }}

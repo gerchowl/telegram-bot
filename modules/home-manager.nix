@@ -1,10 +1,22 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Lars Gerchow
 self:
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
-  inherit (lib) mkEnableOption mkOption mkIf types mkPackageOption
-    concatStringsSep optionalAttrs;
+  inherit (lib)
+    mkEnableOption
+    mkOption
+    mkIf
+    types
+    mkPackageOption
+    concatStringsSep
+    optionalAttrs
+    ;
   cfg = config.services.telegram-bot;
 in
 {
@@ -47,10 +59,12 @@ in
   };
 
   config = mkIf cfg.enable {
-    assertions = [{
-      assertion = !(!cfg.postOnly && cfg.allowedChatIds == [ ]);
-      message = "services.telegram-bot: command mode requires a non-empty allowedChatIds.";
-    }];
+    assertions = [
+      {
+        assertion = !(!cfg.postOnly && cfg.allowedChatIds == [ ]);
+        message = "services.telegram-bot: command mode requires a non-empty allowedChatIds.";
+      }
+    ];
 
     systemd.user.services.telegram-bot = {
       Unit = {
