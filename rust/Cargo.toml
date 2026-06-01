@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Lars Gerchow
+[package]
+name = "telegram-bot"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Lightweight Telegram bot: tg-send + tg-bot, compiled (v2 of the bash implementation)"
+repository = "https://github.com/gerchowl/telegram-bot"
+
+# Binaries are auto-discovered from src/bin/{tg-send,tg-bot}.rs; the shared
+# library is src/lib.rs (crate `telegram_bot`).
+
+[dependencies]
+# Blocking HTTP with native-tls (the most reliable TLS path under Nix). The
+# Telegram API surface we touch is tiny, so we hand-roll the client rather than
+# pull in a full framework (teloxide/frankenstein) — keeps the binary small.
+ureq = { version = "2", default-features = false, features = [
+  "native-tls",
+  "json",
+] }
+serde_json = "1"
+anyhow = "1"
+wait-timeout = "0.2"
+
+# Optimise for a small, self-contained binary — the whole point of v2.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

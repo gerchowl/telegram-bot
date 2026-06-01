@@ -80,10 +80,29 @@
           };
         };
 
+        # ---- v2: compiled Rust implementation of tg-send + tg-bot ----
+        # Drop-in compatible with the bash versions (same env contract, flags,
+        # rights model). A single ~small binary per tool, no curl/jq/sops/age in
+        # the runtime closure. tg-onboard stays bash (interactive sops/age glue).
+        telegram-bot-rs = pkgs.rustPlatform.buildRustPackage {
+          pname = "telegram-bot-rs";
+          version = "0.1.0";
+          src = ./rust;
+          cargoLock.lockFile = ./rust/Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ]; # for native-tls (openssl-sys)
+          meta = {
+            description = "Rust (v2) implementation of tg-send + tg-bot";
+            license = lib.licenses.mit;
+            mainProgram = "tg-send";
+          };
+        };
+
         # ---- formatting / lint / license tooling (shared by `nix fmt` + checks) ----
         fmtInputs = [
           pkgs.nixfmt-rfc-style
           pkgs.shfmt
+          pkgs.rustfmt
           pkgs.findutils
         ];
         lintInputs = [
@@ -100,6 +119,8 @@
             mapfile -t nixf < <(find . -name '*.nix' -not -path './.git/*')
             [ "''${#nixf[@]}" -gt 0 ] && nixfmt "''${nixf[@]}"
             shfmt -w ${shfmtFlags} ${shFiles}
+            mapfile -t rsf < <(find rust -name '*.rs')
+            [ "''${#rsf[@]}" -gt 0 ] && rustfmt --edition 2021 "''${rsf[@]}"
           '';
         };
 
@@ -108,6 +129,7 @@
           mapfile -t nixf < <(find . -name '*.nix' -not -path './.git/*')
           nixfmt --check "''${nixf[@]}"
           shfmt -d ${shfmtFlags} ${shFiles}
+          rustfmt --edition 2021 --check $(find rust -name '*.rs')
           touch "$out"
         '';
 
@@ -169,6 +191,7 @@
             tg-bot
             tg-onboard
             telegram-bot
+            telegram-bot-rs
             ;
           default = telegram-bot;
         };
@@ -205,6 +228,25 @@
                   pkgs.python3
                   pkgs.curl
                   pkgs.jq
+                  pkgs.coreutils
+                  pkgs.gnugrep
+                  pkgs.bash
+                ];
+                TGB_COMMANDS = ./commands;
+                TGB_MOCK = ./tests/mock.py;
+              }
+              ''
+                bash ${./tests/e2e.sh}
+                touch "$out"
+              '';
+          # Same hermetic suite, but with the Rust binaries on PATH — proves the
+          # v2 implementation is behaviourally identical. Note: no curl/jq here.
+          e2e-rs =
+            pkgs.runCommand "telegram-bot-e2e-rs"
+              {
+                nativeBuildInputs = [
+                  telegram-bot-rs
+                  pkgs.python3
                   pkgs.coreutils
                   pkgs.gnugrep
                   pkgs.bash

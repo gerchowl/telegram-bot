@@ -14,7 +14,9 @@ and control channel**. One flake gives you:
   project **template** and a `mkSend` helper for downstream flakes.
 
 Pure `bash` + `curl` + `jq` at the core; commands are arbitrary executables, so the
-*logic* you wire up can be in any language.
+*logic* you wire up can be in any language. A compiled **Rust implementation (v2)**
+of `tg-send`/`tg-bot` is also available — identical behaviour, ~⅓ the runtime closure
+(see [Rust implementation](#rust-implementation-v2)).
 
 > **The one manual step:** Telegram has no API to *create* a bot — you register it
 > once by hand with [@BotFather](https://t.me/BotFather) in any Telegram client.
@@ -220,10 +222,51 @@ in pkgs.mkShell { packages = [ send ]; };
 
 ---
 
+## Rust implementation (v2)
+
+`tg-send` and `tg-bot` also exist as a single compiled Rust crate (`rust/`),
+built by the flake as `packages.telegram-bot-rs`. It is **drop-in compatible** —
+same flags, same env contract, same rights model — and runs the *same* e2e suite
+(`checks.e2e-rs`), so behaviour is identical (the security regression tests pass
+against it too).
+
+Why it exists: the bash tools pull `curl`/`jq`/`sops`/`age`/coreutils into the
+runtime closure (~123 MB for `tg-bot` alone). The Rust binaries are ~1 MB each
+with a **~48 MB closure** (glibc + openssl), and ship as standalone binaries you
+can `scp` anywhere. Because there's no shell, the glob/word-split/eval bug classes
+can't occur — arguments go straight to `argv` via `std::process::Command`.
+
+Use it:
+
+```sh
+nix run .#telegram-bot-rs -- ...        # tg-send / tg-bot binaries
+nix profile install .#telegram-bot-rs
+```
+
+In the NixOS module, just point `package` at it (the unit runs `${package}/bin/tg-bot`):
+
+```nix
+services.telegram-bot = {
+  enable = true;
+  package = telegram-bot.packages.${system}.telegram-bot-rs; # Rust daemon
+  tokenFile = config.sops.secrets.telegram_bot_token.path;
+};
+```
+
+`tg-onboard` stays bash (one-time interactive sops/age setup) — run it once, then
+the Rust daemon/sender consume the same `config.env` / `tokenFile`. The bash tools
+remain the default; the Rust build is opt-in until it's had more mileage.
+
+Could shrink further (rustls instead of native-tls drops openssl; musl static for a
+fully self-contained binary) — noted as future tuning.
+
+---
+
 ## Layout
 
 ```
 flake.nix                 packages · apps · nixos/home modules · template · lib.mkSend
+rust/                     v2: compiled tg-send + tg-bot (Cargo crate, buildRustPackage)
 scripts/lib.sh            shared: config load, token resolution, send helper
 scripts/tg-onboard.sh     guided BotFather setup + sops encrypt + chat-id discovery
 scripts/tg-send.sh        outbound CLI (message / document)
