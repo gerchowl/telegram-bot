@@ -74,6 +74,22 @@ printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"privat
 run_bot_until 'pong hello' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
 want "pong hello" 'pong hello' "$MOCK_LOG"
 
+echo "== tg-bot: path traversal is rejected (no RCE escape) =="
+# Plant an executable OUTSIDE the commands dir. A traversal command name must
+# be refused and must NOT run it.
+mkdir -p "$T/outside"
+printf '#!%s\necho PWNED_TRAVERSAL\n' "$bash_path" > "$T/outside/pwn"; chmod +x "$T/outside/pwn"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/../outside/pwn"}}]\n' > "$T/u.json"
+: > "$MOCK_LOG"; start_mock "$T/u.json"
+run_bot_until 'Unknown command' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+want "traversal refused" 'Unknown command' "$MOCK_LOG"; absent "planted binary NOT executed" 'PWNED_TRAVERSAL' "$MOCK_LOG"
+
+echo "== tg-bot: args are not glob-expanded =="
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/ping *"}}]\n' > "$T/u.json"
+: > "$MOCK_LOG"; start_mock "$T/u.json"
+run_bot_until 'pong' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+want "literal '*' passed (no glob)" 'pong *' "$MOCK_LOG"; absent "dir listing not leaked" 'pong ping status' "$MOCK_LOG"
+
 echo "== tg-bot: unauthorized chat =="
 printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":999,"type":"private"},"text":"/ping hi"}}]\n' > "$T/u.json"
 : > "$MOCK_LOG"; start_mock "$T/u.json"

@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Lars Gerchow
 # Shared helpers, concatenated into each telegram-bot CLI by flake.nix.
 # Provides config loading, token resolution (env > file > sops) and a send helper.
 
@@ -39,6 +41,9 @@ tg_resolve_token() {
 
 # Call a Telegram Bot API method with urlencoded form fields.
 # Usage: tg_api <token> <method> [curl-args...]   -> prints raw JSON response
+# NOTE: Telegram's Bot API authenticates by putting the token in the URL path
+# (there is no header-based auth), so the token can appear in `curl --verbose`,
+# proxy logs, or `strace` output. This is unavoidable; keep such traces private.
 tg_api() {
   local tok="$1" method="$2"
   shift 2

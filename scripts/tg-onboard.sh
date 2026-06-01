@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Lars Gerchow
 # tg-onboard — interactive first-run setup for a Telegram bot.
 #   1. walks you through registering a bot with @BotFather
 #   2. validates the token you paste and encrypts it with sops/age

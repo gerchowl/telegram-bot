@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Example command. Invoked when an authorized user sends "/ping [text]".
 # The daemon passes message args as $1, $2, …  and exports TG_CHAT_ID / TG_COMMAND.
 # Whatever you print to stdout/stderr is sent back as the reply.

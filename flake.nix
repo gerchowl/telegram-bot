@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Lars Gerchow
 {
   description = "A general-purpose Telegram bot for projects: guided onboarding, a tg-send CLI, and a NixOS/Home-Manager service with a safe command runner.";
 
@@ -23,6 +25,7 @@
             inherit name;
             runtimeInputs = runtimeInputs ++ [ pkgs.curl pkgs.jq pkgs.coreutils ];
             text = libSh + "\n" + builtins.readFile src;
+            meta = { mainProgram = name; license = lib.licenses.mit; };
           };
 
         tg-send = mkTool {
@@ -44,7 +47,10 @@
         telegram-bot = pkgs.symlinkJoin {
           name = "telegram-bot";
           paths = [ tg-send tg-bot tg-onboard ];
-          meta.description = "tg-send, tg-bot and tg-onboard in one package";
+          meta = {
+            description = "tg-send, tg-bot and tg-onboard in one package";
+            license = lib.licenses.mit;
+          };
         };
       in
       {

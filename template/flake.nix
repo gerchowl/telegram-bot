@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 {
   description = "A project using the telegram-bot flake for notifications / control.";
 

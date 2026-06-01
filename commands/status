@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Example command: report basic host status. Sent back when an authorized
 # user messages "/status".
 set -euo pipefail

@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Lars Gerchow
 # tg-send — push a message (or file) to Telegram. The outbound interface other
 # tooling uses: `tg-send "build done"`, `journalctl -u foo | tg-send --file -`.
 

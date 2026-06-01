@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Lars Gerchow
 # tg-bot — long-polling daemon. Receives messages and (optionally) runs commands.
 #
 # Rights model (safe by default):
@@ -6,8 +8,10 @@
 #   • command mode (POST_ONLY=0) requires BOTH:
 #       - TELEGRAM_ALLOWED_CHAT_IDS  (comma/space list; empty ⇒ nobody authorized)
 #       - TELEGRAM_COMMANDS_DIR      (dir of executables; '/foo' runs './foo')
-#   Args are passed as separate argv (never eval'd); each command is run under
-#   `timeout` and its combined output is sent back (truncated to Telegram's limit).
+#   Command names are restricted to [A-Za-z0-9_-] so they cannot escape the
+#   commands dir; args are split into separate argv with NO glob/pathname
+#   expansion and NO eval; each command runs under `timeout` and its combined
+#   output is sent back (truncated to Telegram's limit).
 #
 # Built-in commands (always available): /start /id /help
 
@@ -41,13 +45,24 @@ $extra"
 
 tg_run_command() {
   local cmd="$1" rest="$2" chat="$3" dir="${TELEGRAM_COMMANDS_DIR:-}"
+  # Hard gate: a command name must be a simple identifier. This is the control
+  # that keeps execution INSIDE the commands dir — it rejects path traversal
+  # ("/../../bin/sh") and any name with '/', '.', whitespace, etc. Without it,
+  # "$dir/$cmd" could resolve to an arbitrary executable anywhere on disk.
+  case "$cmd" in
+    '' | *[!A-Za-z0-9_-]*)
+      tg_send_message "$chat" "❓ Unknown command: /$cmd  (try /help)"
+      return 0 ;;
+  esac
   if [ -z "$dir" ] || [ ! -x "$dir/$cmd" ]; then
     tg_send_message "$chat" "❓ Unknown command: /$cmd  (try /help)"
     return 0
   fi
-  # Split args on whitespace into argv. No shell evaluation of message content.
-  # shellcheck disable=SC2206
-  local argv=( $rest )
+  # Split args into separate argv. `read -a` does word-splitting ONLY — no
+  # pathname/glob expansion and no eval — unlike `argv=( $rest )`, so "/ping *"
+  # passes a literal "*" rather than the directory listing.
+  local argv=()
+  IFS=' ' read -r -a argv <<<"$rest" || true
   local out rc
   set +e
   out="$( cd "$dir" && TG_CHAT_ID="$chat" TG_COMMAND="$cmd" \
@@ -97,7 +112,7 @@ main() {
   tok="$(tg_resolve_token)" || exit $?
   export TELEGRAM_BOT_TOKEN="$tok"   # cache so replies don't re-decrypt sops each time
 
-  local state_dir offset_file offset resp n i
+  local state_dir offset_file offset resp n i uid
   state_dir="${TELEGRAM_BOT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/telegram-bot}"
   mkdir -p "$state_dir"
   offset_file="$state_dir/offset"
@@ -120,8 +135,11 @@ main() {
     [ "${n:-0}" -gt 0 ] || continue
     for (( i=0; i<n; i++ )); do
       tg_handle_update "$(jq -c ".result[$i]" <<<"$resp")"
-      offset="$(( $(jq -r ".result[$i].update_id" <<<"$resp") + 1 ))"
-      echo "$offset" > "$offset_file"
+      uid="$(jq -r ".result[$i].update_id" <<<"$resp")"
+      case "$uid" in
+        '' | *[!0-9]*) ;;                                  # ignore non-numeric; never crash the loop
+        *) offset=$((uid + 1)); echo "$offset" > "$offset_file" ;;
+      esac
     done
   done
 }

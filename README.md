@@ -95,8 +95,11 @@ tg-send -p MarkdownV2 "*alert*: disk full on \`$(hostname)\`"
 Guarantees in command mode:
 
 - An **empty allowlist authorizes no one** — you must opt chats in explicitly.
-- Message args are passed as **separate argv** — never `eval`'d, so `/deploy; rm -rf`
-  is just two literal arguments to `deploy`.
+- Command **names are restricted to `[A-Za-z0-9_-]`** and resolved only inside the
+  commands dir — a name with `/`, `.` or whitespace is rejected, so a message can't
+  path-traverse to an executable elsewhere on disk.
+- Message args are split into **separate argv with no glob/pathname expansion** and
+  are never `eval`'d — `/deploy; rm -rf /` and `/ping *` are passed literally.
 - Every command runs under `timeout` (`TELEGRAM_COMMAND_TIMEOUT`, default 60s) and
   output is truncated to Telegram's message limit.
 
@@ -233,9 +236,37 @@ template/                 `nix flake init -t` scaffold for a consuming project
 
 ## Security notes
 
+> **⚠️ Command mode runs commands on your host in response to Telegram messages.**
+> Anyone who controls an allow-listed chat — or who obtains your bot token — can run
+> those commands as the bot's user. You alone decide which commands to expose and to
+> whom. Provided "as is", without warranty (see [LICENSE](LICENSE)). Keep
+> `postOnly = true` unless you understand and accept this. Full threat model in
+> [SECURITY.md](SECURITY.md).
+
 - The token is the bot's password — it lives only in `secrets/telegram.yaml`
   (encrypted) and at runtime in a `tokenFile`. Never commit a plaintext token.
+  Telegram's API puts the token in the request URL, so keep `curl -v` / proxy /
+  `strace` traces private.
 - Command mode executes code on your machine on receipt of a Telegram message.
   Keep `allowedChatIds` tight, set BotFather privacy mode, prefer narrow command
   scripts, and keep `hardening = true` unless a command genuinely needs more.
 - `tg-onboard` reads the token with hidden input so it won't hit your shell history.
+
+## Privacy
+
+- The bot receives whatever users send it (message text, sender/chat metadata) and
+  forwards command output back through Telegram. **Message content is processed in
+  memory and not written to disk** — only the Telegram update offset is persisted
+  under the state dir. Note that stderr/journal logs include chat ids (and rejected
+  command names), so journal access means metadata access.
+- All messages transit **Telegram's servers** and are subject to
+  [Telegram's Privacy Policy](https://telegram.org/privacy). If you process other
+  people's messages you may be a data controller — keep `allowedChatIds` tight and
+  enable BotFather privacy mode so the bot only sees commands addressed to it.
+
+## License & trademark
+
+MIT — see [LICENSE](LICENSE). Not affiliated with or endorsed by Telegram.
+"Telegram" is a trademark of Telegram Messenger Inc.; used here descriptively to
+identify the API this tool talks to. You, the bot operator, are responsible for
+compliance with [Telegram's Bot Terms](https://telegram.org/tos).
