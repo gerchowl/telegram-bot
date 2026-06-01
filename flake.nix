@@ -3,6 +3,15 @@
 {
   description = "A general-purpose Telegram bot for projects: guided onboarding, a tg-send CLI, and a NixOS/Home-Manager service with a safe command runner.";
 
+  # To let downstream flakes AUTO-FETCH prebuilt outputs from the Cachix cache
+  # instead of compiling, create the cache, then uncomment and paste its real
+  # public key (shown at app.cachix.org when the cache is created):
+  #   nixConfig = {
+  #     extra-substituters = [ "https://gerchowl.cachix.org" ];
+  #     extra-trusted-public-keys = [ "gerchowl.cachix.org-1:PASTE_REAL_KEY=" ];
+  #   };
+  # (For your own machine you can instead run once: `cachix use gerchowl`.)
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -209,6 +218,15 @@
             type = "app";
             program = "${tg-bot}/bin/tg-bot";
           };
+          # Rust (v2) entrypoints.
+          send-rs = {
+            type = "app";
+            program = "${telegram-bot-rs}/bin/tg-send";
+          };
+          bot-rs = {
+            type = "app";
+            program = "${telegram-bot-rs}/bin/tg-bot";
+          };
           default = self.apps.${system}.onboard;
         };
 
@@ -274,11 +292,17 @@
             pkgs.shellcheck
             pkgs.gitleaks
             pkgs.prek
+            pkgs.just
+            # Rust toolchain for the v2 crate (rust/)
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.clippy
+            pkgs.cargo-audit
           ]
           ++ fmtInputs
           ++ lintInputs;
           shellHook = ''
-            echo "telegram-bot devshell — 'tg-onboard' to set up · 'nix fmt' · 'nix flake check' · 'prek install'."
+            echo "telegram-bot devshell — 'just' for tasks · 'nix fmt' · 'nix flake check' · 'prek install'."
           '';
         };
 

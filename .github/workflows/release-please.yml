@@ -15,7 +15,32 @@ jobs:
       # Maintains a release PR (version bump + CHANGELOG) from Conventional
       # Commits; merging it tags vX.Y.Z and cuts a GitHub release.
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # When a release is cut, archive the exact Rust dependency sources
+      # (cargo vendor) and attach them — so the build stays reproducible
+      # long-term even if a crate is later yanked/removed from crates.io.
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created }}
+      - uses: cachix/install-nix-action@v30
+        if: ${{ steps.release.outputs.release_created }}
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - name: Vendor crate sources and attach to the release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          nix shell nixpkgs#cargo nixpkgs#zstd --command bash -euo pipefail -c '
+            cd rust
+            cargo vendor vendor > vendor-config.toml
+            mkdir -p .cargo && mv vendor-config.toml .cargo/config.toml
+            cd ..
+            tar --use-compress-program="zstd -19" -cf vendor.tar.zst -C rust .
+          '
+          gh release upload "$TAG" vendor.tar.zst --clobber

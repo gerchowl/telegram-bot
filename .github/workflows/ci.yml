@@ -23,6 +23,10 @@ jobs:
         # only way to actually exercise Darwin + ARM.
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
+    # 'true' only when the CACHIX_AUTH_TOKEN secret exists, so the push step is a
+    # clean no-op until you opt in (create the cache + add the secret).
+    env:
+      HAS_CACHIX: ${{ secrets.CACHIX_AUTH_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
@@ -30,6 +34,13 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
+      # Configure + push to the binary cache so downstream consumers auto-fetch
+      # prebuilt outputs for this OS instead of compiling.
+      - uses: cachix/cachix-action@v15
+        if: env.HAS_CACHIX == 'true'
+        with:
+          name: gerchowl
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       # One command runs shellcheck (build-time), the format/lint/licenses
       # checks, module evaluation, and the hermetic e2e (incl. the RCE
       # regression tests).

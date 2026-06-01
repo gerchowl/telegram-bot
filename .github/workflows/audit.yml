@@ -1,0 +1,49 @@
+name: audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1" # weekly, Mondays 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Known-vulnerable Rust crates (RustSec advisory DB). Blocking.
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - run: nix shell nixpkgs#cargo-audit --command cargo audit --file rust/Cargo.lock
+
+  # CVEs in the runtime closure (openssl, curl, glibc, sops, …) via the
+  # Nix-native scanner. Informational + weekly: glibc/openssl carry noisy,
+  # often-disputed advisories, so this reports rather than blocks.
+  vulnix:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - name: scan runtime closures for CVEs
+        run: |
+          paths=$(nix build .#telegram-bot-rs .#telegram-bot .#tg-bot --no-link --print-out-paths)
+          # shellcheck disable=SC2086
+          nix shell nixpkgs#vulnix --command vulnix $paths || true
+
+  # Block PRs that introduce known-vulnerable dependencies.
+  dependency-review:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4

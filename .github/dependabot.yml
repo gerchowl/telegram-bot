@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Rust crate deps (the v2 implementation). Security + version-bump PRs.
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "fix(deps)" # conventional commit -> release-please patch bump
+
+  # Keep the pinned GitHub Actions current (and security-patched).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
