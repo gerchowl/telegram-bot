@@ -31,8 +31,19 @@ tg_resolve_token() {
     return 0
   fi
   if [ -n "${TELEGRAM_BOT_SOPS_FILE:-}" ]; then
-    local key="${TELEGRAM_BOT_SOPS_KEY:-telegram_bot_token}"
-    sops -d --extract "[\"${key}\"]" "$TELEGRAM_BOT_SOPS_FILE" | tr -d '\r\n'
+    local key="${TELEGRAM_BOT_SOPS_KEY:-telegram_bot_token}" tok
+    # Capture so we can see sops' exit status — a pipe to `tr` would mask it,
+    # yielding an empty token that silently 404s every API call later.
+    if ! tok="$(sops -d --extract "[\"${key}\"]" "$TELEGRAM_BOT_SOPS_FILE")"; then
+      echo "telegram-bot: sops failed to decrypt '$TELEGRAM_BOT_SOPS_FILE' (key '$key'). Is your age identity reachable? Set SOPS_AGE_KEY_FILE (e.g. ~/.config/sops/age/keys.txt)." >&2
+      return 3
+    fi
+    tok="$(printf '%s' "$tok" | tr -d '\r\n')"
+    if [ -z "$tok" ]; then
+      echo "telegram-bot: decrypted token is empty (key '$key' in '$TELEGRAM_BOT_SOPS_FILE')." >&2
+      return 3
+    fi
+    printf '%s' "$tok"
     return 0
   fi
   echo "telegram-bot: no bot token found. Set TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_TOKEN_FILE or TELEGRAM_BOT_SOPS_FILE (run 'tg-onboard' to set up)." >&2

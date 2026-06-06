@@ -141,7 +141,18 @@ main() {
       continue
     fi
     if [ "$(jq -r '.ok // false' <<<"$resp")" != "true" ]; then
-      echo "tg-bot: getUpdates error: $(jq -r '.description // "unknown"' <<<"$resp")" >&2
+      local code desc
+      code="$(jq -r '.error_code // 0' <<<"$resp")"
+      desc="$(jq -r '.description // "unknown"' <<<"$resp")"
+      # 401/404 mean the token is invalid/empty — a config error, not a blip.
+      # Fail loud (non-zero exit) instead of retrying it forever in silence.
+      case "$code" in
+        401 | 404)
+          echo "tg-bot: FATAL getUpdates ${code}: ${desc} — bot token is invalid or empty; refusing to retry. Check token resolution (sops/age)." >&2
+          exit 1
+          ;;
+      esac
+      echo "tg-bot: getUpdates error ${code}: ${desc}" >&2
       sleep 5
       continue
     fi
