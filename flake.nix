@@ -75,6 +75,11 @@
             pkgs.age
           ];
         };
+        tg-poll = mkTool {
+          name = "tg-poll";
+          src = ./scripts/tg-poll.sh;
+          runtimeInputs = [ pkgs.sops ];
+        };
 
         telegram-bot = pkgs.symlinkJoin {
           name = "telegram-bot";
@@ -82,6 +87,7 @@
             tg-send
             tg-bot
             tg-onboard
+            tg-poll
           ];
           meta = {
             description = "tg-send, tg-bot and tg-onboard in one package";
@@ -120,6 +126,7 @@
         ];
         shfmtFlags = "-i 2 -ci";
         shFiles = "scripts/*.sh tests/*.sh commands/ping commands/status";
+        # (scripts/*.sh now includes tg-poll.sh)
 
         treefmt = pkgs.writeShellApplication {
           name = "fmt";
@@ -199,6 +206,7 @@
             tg-send
             tg-bot
             tg-onboard
+            tg-poll
             telegram-bot
             telegram-bot-rs
             ;
@@ -233,7 +241,7 @@
         # Building the tools = running shellcheck on every script, so this is a
         # real check. `e2e` runs the scripts against a localhost mock Telegram API.
         checks = {
-          inherit tg-send tg-bot tg-onboard;
+          inherit tg-send tg-bot tg-onboard tg-poll;
           format = checkFormat;
           lint = checkLint;
           licenses = checkLicenses;
@@ -285,6 +293,7 @@
             tg-send
             tg-bot
             tg-onboard
+            tg-poll
             pkgs.curl
             pkgs.jq
             pkgs.sops
