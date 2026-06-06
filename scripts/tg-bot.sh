@@ -86,6 +86,26 @@ tg_run_command() {
   tg_send_message "$chat" "$out" "$pmode"
 }
 
+# A non-anonymous poll vote. Runs the optional `_poll_answer` hook in the
+# commands dir with POLL_ID / POLL_OPTIONS (JSON array of selected indexes) /
+# POLL_VOTER; any output is sent to the configured chat as a confirmation.
+tg_handle_poll_answer() {
+  local upd="$1" dir="${TELEGRAM_COMMANDS_DIR:-}" poll_id voter opts out
+  [ -n "$dir" ] && [ -x "$dir/_poll_answer" ] || return 0
+  poll_id="$(jq -r '.poll_answer.poll_id // empty' <<<"$upd")"
+  voter="$(jq -r '.poll_answer.user.id // empty' <<<"$upd")"
+  opts="$(jq -rc '.poll_answer.option_ids // []' <<<"$upd")"
+  [ -n "$poll_id" ] || return 0
+  set +e
+  out="$(cd "$dir" && POLL_ID="$poll_id" POLL_OPTIONS="$opts" POLL_VOTER="$voter" \
+    timeout "${TELEGRAM_COMMAND_TIMEOUT:-60}" "./_poll_answer" 2>&1)"
+  set -e
+  if [ -n "$out" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+    tg_send_message "$TELEGRAM_CHAT_ID" "${out:0:$TG_LIMIT}"
+  fi
+  return 0
+}
+
 tg_handle_update() {
   local upd="$1" chat text cmd rest
   chat="$(jq -r '.message.chat.id // empty' <<<"$upd")"
@@ -133,7 +153,7 @@ main() {
   tok="$(tg_resolve_token)" || exit $?
   export TELEGRAM_BOT_TOKEN="$tok" # cache so replies don't re-decrypt sops each time
 
-  local state_dir offset_file offset resp n i uid
+  local state_dir offset_file offset resp n i uid upd
   state_dir="${TELEGRAM_BOT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/telegram-bot}"
   mkdir -p "$state_dir"
   offset_file="$state_dir/offset"
@@ -144,7 +164,9 @@ main() {
 
   while true; do
     set +e
-    resp="$(curl --silent --show-error --max-time 70 "$TG_API_BASE/bot${tok}/getUpdates?timeout=50&offset=${offset}")"
+    # allowed_updates includes poll_answer so the command runner can record
+    # votes (e.g. a workout-tracking poll); URL-encoded ["message","poll_answer"].
+    resp="$(curl --silent --show-error --max-time 70 "$TG_API_BASE/bot${tok}/getUpdates?timeout=50&offset=${offset}&allowed_updates=%5B%22message%22%2C%22poll_answer%22%5D")"
     local curl_rc=$?
     set -e
     if [ "$curl_rc" -ne 0 ]; then
@@ -170,7 +192,12 @@ main() {
     n="$(jq '.result | length' <<<"$resp")"
     [ "${n:-0}" -gt 0 ] || continue
     for ((i = 0; i < n; i++)); do
-      tg_handle_update "$(jq -c ".result[$i]" <<<"$resp")"
+      upd="$(jq -c ".result[$i]" <<<"$resp")"
+      if [ "$(jq -r 'has("poll_answer")' <<<"$upd")" = "true" ]; then
+        tg_handle_poll_answer "$upd"
+      else
+        tg_handle_update "$upd"
+      fi
       uid="$(jq -r ".result[$i].update_id" <<<"$resp")"
       case "$uid" in
         '' | *[!0-9]*) ;; # ignore non-numeric; never crash the loop
