@@ -71,8 +71,19 @@ tg_run_command() {
   rc=$?
   set -e
   [ -n "$out" ] || out="(/$cmd exited $rc with no output)"
+  # A command may opt into a Telegram parse mode by emitting a sentinel first
+  # line:  \x01parse_mode=MarkdownV2  (stripped before sending). Lets a command
+  # return rich/aligned output without changing the default plain behaviour.
+  local pmode=""
+  case "$out" in
+    $'\001parse_mode='*)
+      pmode="${out%%$'\n'*}"
+      pmode="${pmode#*=}"
+      out="${out#*$'\n'}"
+      ;;
+  esac
   out="${out:0:$TG_LIMIT}"
-  tg_send_message "$chat" "$out"
+  tg_send_message "$chat" "$out" "$pmode"
 }
 
 tg_handle_update() {

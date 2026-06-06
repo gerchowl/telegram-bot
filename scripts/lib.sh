@@ -80,7 +80,18 @@ tg_send_message() {
     return 1
   }
   if [ "$(jq -r '.ok' <<<"$resp")" != "true" ]; then
-    echo "telegram-bot: API error: $(jq -r '.description // "unknown error"' <<<"$resp")" >&2
+    local desc
+    desc="$(jq -r '.description // "unknown error"' <<<"$resp")"
+    # A bad parse_mode must not eat the message — retry once as plain text so
+    # the user still gets the content (just unformatted).
+    if [ -n "${3:-}" ]; then
+      echo "telegram-bot: ${3} rejected ($desc); retrying as plain text" >&2
+      local plain=(--data-urlencode "chat_id=${chat}" --data-urlencode "text=${text}")
+      [ "${4:-0}" = 1 ] && plain+=(--data-urlencode "disable_notification=true")
+      resp="$(tg_api "$tok" sendMessage "${plain[@]}")" || return 1
+      [ "$(jq -r '.ok' <<<"$resp")" = "true" ] && return 0
+    fi
+    echo "telegram-bot: API error: $desc" >&2
     return 1
   fi
   return 0
