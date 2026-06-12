@@ -12,11 +12,13 @@ repository = "https://github.com/gerchowl/telegram-bot"
 # library is src/lib.rs (crate `telegram_bot`).
 
 [dependencies]
-# Blocking HTTP with native-tls (the most reliable TLS path under Nix). The
-# Telegram API surface we touch is tiny, so we hand-roll the client rather than
-# pull in a full framework (teloxide/frankenstein) — keeps the binary small.
+# Blocking HTTP over rustls + webpki-roots (the bundled Mozilla CA set): a pure-Rust TLS stack
+# with no openssl-sys / system-cert linkage — the reliable path under Nix and static builds.
+# (native-tls produced "no TLS backend is configured" at runtime under Nix — see #26.) The
+# Telegram API surface we touch is tiny, so we hand-roll the client rather than pull in a full
+# framework (teloxide/frankenstein) — keeps the binary small.
 ureq = { version = "2", default-features = false, features = [
-  "native-tls",
+  "tls",
   "json",
 ] }
 serde_json = "1"

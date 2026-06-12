@@ -106,8 +106,7 @@
           version = "0.1.0";
           src = ./rust;
           cargoLock.lockFile = ./rust/Cargo.lock;
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.openssl ]; # for native-tls (openssl-sys)
+          # rustls + webpki-roots: pure-Rust TLS, no openssl-sys/pkg-config needed (see #26).
           meta = {
             description = "Rust (v2) implementation of tg-send + tg-bot";
             license = lib.licenses.mit;

@@ -12,14 +12,14 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use telegram_bot::{resolve_token, Config, Tg};
+use telegram_bot::{redact, resolve_token, Config, Tg};
 use wait_timeout::ChildExt;
 
 const TG_LIMIT: usize = 3900; // headroom under Telegram's 4096-char cap
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("tg-bot: {e:#}");
+        eprintln!("tg-bot: {}", redact(&format!("{e:#}")));
         std::process::exit(1);
     }
 }
@@ -78,7 +78,7 @@ fn run() -> anyhow::Result<()> {
         let resp = match tg.get_updates(offset, 50) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("tg-bot: getUpdates error: {e:#}");
+                eprintln!("tg-bot: getUpdates error: {}", redact(&format!("{e:#}")));
                 std::thread::sleep(Duration::from_secs(3));
                 continue;
             }
@@ -89,14 +89,18 @@ fn run() -> anyhow::Result<()> {
             .cloned()
             .unwrap_or_default();
         for upd in &results {
-            handle_update(
-                &tg,
-                upd,
-                post_only,
-                &allow,
-                commands_dir.as_deref(),
-                cmd_timeout,
-            );
+            if upd.get("poll_answer").is_some() {
+                handle_poll_answer(&tg, upd, commands_dir.as_deref(), cmd_timeout);
+            } else {
+                handle_update(
+                    &tg,
+                    upd,
+                    post_only,
+                    &allow,
+                    commands_dir.as_deref(),
+                    cmd_timeout,
+                );
+            }
             if let Some(uid) = upd.get("update_id").and_then(serde_json::Value::as_i64) {
                 offset = uid + 1;
                 let _ = std::fs::write(&offset_file, offset.to_string());
@@ -227,7 +231,10 @@ fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Optio
             "tg-bot: registered {} command(s) via setMyCommands",
             cmds.len()
         ),
-        Err(e) => eprintln!("tg-bot: setMyCommands failed: {e:#}"),
+        Err(e) => eprintln!(
+            "tg-bot: setMyCommands failed: {}",
+            redact(&format!("{e:#}"))
+        ),
     }
 }
 
@@ -305,25 +312,44 @@ fn run_command(
     } else {
         out
     };
+    // A command may opt into a Telegram parse mode by emitting a sentinel first line
+    // `\x01parse_mode=MarkdownV2` (stripped before sending) — matches the bash daemon.
+    let mut parse_mode: Option<String> = None;
+    if let Some(rest) = msg.strip_prefix("\u{1}parse_mode=") {
+        let (mode, after) = match rest.split_once('\n') {
+            Some((m, a)) => (m.to_string(), a.to_string()),
+            None => (rest.to_string(), String::new()),
+        };
+        parse_mode = Some(mode);
+        msg = after;
+    }
     if msg.chars().count() > TG_LIMIT {
         msg = msg.chars().take(TG_LIMIT).collect();
     }
-    let _ = tg.send_message(chat, &msg, None, false);
+    let _ = tg.send_message(chat, &msg, parse_mode.as_deref(), false);
 }
 
-fn run_with_timeout(path: &Path, argv: &[&str], chat: &str, cmd: &str, secs: u64) -> (String, i32) {
+/// Run `path` with `argv` + `envs`, capturing combined stdout+stderr under a timeout.
+/// Returns (trimmed output, timed_out, exit code). No shell ⇒ no glob/word-split/eval.
+fn spawn_capture(
+    path: &Path,
+    argv: &[&str],
+    envs: &[(&str, &str)],
+    secs: u64,
+) -> (String, bool, i32) {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut child = match Command::new(path)
+    let mut builder = Command::new(path);
+    builder
         .args(argv)
         .current_dir(dir)
-        .env("TG_CHAT_ID", chat)
-        .env("TG_COMMAND", cmd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+        .stderr(Stdio::piped());
+    for (k, v) in envs {
+        builder.env(k, v);
+    }
+    let mut child = match builder.spawn() {
         Ok(c) => c,
-        Err(e) => return (format!("failed to run /{cmd}: {e}"), 127),
+        Err(e) => return (format!("failed to run {}: {e}", path.display()), false, 127),
     };
 
     // Drain both pipes in threads so a chatty command can't deadlock on a full
@@ -358,12 +384,70 @@ fn run_with_timeout(path: &Path, argv: &[&str], chat: &str, cmd: &str, secs: u64
     let e = th_e.join().unwrap_or_default();
     let mut s = String::from_utf8_lossy(&o).into_owned();
     s.push_str(&String::from_utf8_lossy(&e));
-    let mut s = s.trim_end().to_string();
+    (s.trim_end().to_string(), timed_out, rc)
+}
+
+fn run_with_timeout(path: &Path, argv: &[&str], chat: &str, cmd: &str, secs: u64) -> (String, i32) {
+    let (mut s, timed_out, rc) = spawn_capture(
+        path,
+        argv,
+        &[("TG_CHAT_ID", chat), ("TG_COMMAND", cmd)],
+        secs,
+    );
     if timed_out {
         s.push_str(&format!("\n(/{cmd} timed out after {secs}s)"));
         return (s, 124);
     }
     (s, rc)
+}
+
+/// A non-anonymous poll vote: run the optional `_poll_answer` hook in the commands dir with
+/// POLL_ID / POLL_OPTIONS (JSON array of selected indexes) / POLL_VOTER; any output goes to the
+/// configured chat as a confirmation. Mirrors the bash daemon.
+fn handle_poll_answer(tg: &Tg, upd: &serde_json::Value, commands_dir: Option<&str>, secs: u64) {
+    let dir = match commands_dir {
+        Some(d) => d,
+        None => return,
+    };
+    let path = Path::new(dir).join("_poll_answer");
+    if !is_executable_file(&path) {
+        return;
+    }
+    let poll_id = upd
+        .pointer("/poll_answer/poll_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if poll_id.is_empty() {
+        return;
+    }
+    let voter = upd
+        .pointer("/poll_answer/user/id")
+        .and_then(serde_json::Value::as_i64)
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    let opts = upd
+        .pointer("/poll_answer/option_ids")
+        .map(serde_json::Value::to_string)
+        .unwrap_or_else(|| "[]".to_string());
+    let (out, _timed_out, _rc) = spawn_capture(
+        &path,
+        &[],
+        &[
+            ("POLL_ID", poll_id),
+            ("POLL_OPTIONS", &opts),
+            ("POLL_VOTER", &voter),
+        ],
+        secs,
+    );
+    if out.is_empty() {
+        return;
+    }
+    if let Ok(chat) = std::env::var("TELEGRAM_CHAT_ID") {
+        if !chat.is_empty() {
+            let msg: String = out.chars().take(TG_LIMIT).collect();
+            let _ = tg.send_message(&chat, &msg, None, false);
+        }
+    }
 }
 
 fn help_text(post_only: bool, commands_dir: Option<&str>) -> String {

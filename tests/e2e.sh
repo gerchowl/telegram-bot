@@ -89,6 +89,16 @@ want "file token chat 7" '"chat_id": "7"' "$MOCK_LOG"
 : >"$MOCK_LOG"
 echo "piped" | env TELEGRAM_BOT_TOKEN=T tg-send --chat 9
 want "stdin" 'piped' "$MOCK_LOG"
+
+echo "== tg-send: a real TLS backend is wired (https://, not just the mock) =="
+# Hit a closed local HTTPS port: the client must ATTEMPT the handshake (→ a connect/network
+# error) and must NOT bail for lack of a TLS backend. curl/rustls/native-tls all attempt it; a
+# binary with no TLS backend errors *before* connecting ("no TLS backend"/"Unknown Scheme").
+# Loopback only, so it runs in the network-less nix sandbox. Regression guard for #26.
+env TELEGRAM_BOT_TOKEN=T TELEGRAM_API_BASE=https://127.0.0.1:9 tg-send --chat 1 "probe" \
+  >"$T/tls.out" 2>&1 || true
+absent "TLS backend present (no missing-backend error)" 'no TLS backend' "$T/tls.out"
+absent "https scheme is supported" 'Unknown Scheme' "$T/tls.out"
 : >"$MOCK_LOG"
 echo data | env TELEGRAM_BOT_TOKEN=T tg-send --chat 5 --file - cap
 want "document" '"method": "sendDocument"' "$MOCK_LOG"
@@ -172,6 +182,25 @@ printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"privat
 start_mock "$T/u.json"
 run_bot_until 'chat id: 42' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=1
 want "/id reply" 'chat id: 42' "$MOCK_LOG"
+
+echo "== tg-bot: command parse-mode sentinel (\x01parse_mode=…) =="
+printf '#!%s\nprintf "\\001parse_mode=MarkdownV2\\n*bold*\\n"\n' "$bash_path" >"$COMMANDS/md"
+chmod +x "$COMMANDS/md"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/md"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until '*bold*' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+want "parse_mode applied from sentinel" '"parse_mode": "MarkdownV2"' "$MOCK_LOG"
+want "sentinel stripped from text" '"text": "*bold*"' "$MOCK_LOG"
+
+echo "== tg-bot: _poll_answer hook =="
+printf '#!%s\necho "vote $POLL_OPTIONS by $POLL_VOTER on $POLL_ID"\n' "$bash_path" >"$COMMANDS/_poll_answer"
+chmod +x "$COMMANDS/_poll_answer"
+printf '[{"update_id":1,"poll_answer":{"poll_id":"PID7","user":{"id":42},"option_ids":[1,2]}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'vote' env TELEGRAM_BOT_TOKEN=T TELEGRAM_CHAT_ID=42 TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+want "poll hook ran with options" 'vote [1,2] by 42 on PID7' "$MOCK_LOG"
 
 echo
 echo "RESULT: $pass passed, $fail failed"

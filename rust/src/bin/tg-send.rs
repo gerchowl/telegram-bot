@@ -25,7 +25,7 @@ Token resolution: $TELEGRAM_BOT_TOKEN > $TELEGRAM_BOT_TOKEN_FILE > $TELEGRAM_BOT
 Chat resolution:  --chat > $TELEGRAM_CHAT_ID";
 
 fn fail(msg: &str, code: i32) -> ! {
-    eprintln!("tg-send: {msg}");
+    eprintln!("tg-send: {}", telegram_bot::redact(msg)); // never leak the token via an error URL
     exit(code);
 }
 
