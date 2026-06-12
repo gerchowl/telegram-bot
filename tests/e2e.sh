@@ -118,6 +118,20 @@ start_mock "$T/u.json"
 run_bot_until 'pong hello' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
 want "pong hello" 'pong hello' "$MOCK_LOG"
 
+echo "== tg-bot: setMyCommands auto-registers the / menu from '# desc:' =="
+: >"$MOCK_LOG"
+start_mock  # no updates needed — registration happens at startup
+run_bot_until 'setMyCommands' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+want "menu registered" 'setMyCommands' "$MOCK_LOG"
+want "ping desc from # desc:" 'liveness check' "$MOCK_LOG"
+
+echo "== tg-bot: setMyCommands opt-out (TELEGRAM_SET_COMMANDS=0) =="
+: >"$MOCK_LOG"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/ping hi"}}]\n' >"$T/u.json"
+start_mock "$T/u.json"
+run_bot_until 'pong hi' env TELEGRAM_BOT_TOKEN=T TELEGRAM_SET_COMMANDS=0 TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+absent "no menu registered when opted out" 'setMyCommands' "$MOCK_LOG"
+
 echo "== tg-bot: path traversal is rejected (no RCE escape) =="
 # Plant an executable OUTSIDE the commands dir. A traversal command name must
 # be refused and must NOT run it.

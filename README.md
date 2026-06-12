@@ -133,6 +133,21 @@ TELEGRAM_COMMANDS_DIR="$PWD/commands" \
 
 Then message `/deploy` from your chat. (See `commands/ping` and `commands/status`.)
 
+### The `/` menu (auto-registered)
+
+Give a command a `# desc:` line and `tg-bot` registers the Telegram **`/` autocomplete
+menu** for you on startup (Bot API `setMyCommands`) — no manual BotFather `/setcommands`:
+
+```sh
+#!/usr/bin/env bash
+# desc: restart myapp
+set -euo pipefail
+systemctl restart myapp && echo "restarted ✅"
+```
+
+Only commands with a `# desc:` are listed; names must be Telegram-valid (`[a-z0-9_]`,
+≤32 chars). Set `TELEGRAM_SET_COMMANDS=0` to opt out (e.g. if you manage the menu by hand).
+
 ---
 
 ## NixOS service

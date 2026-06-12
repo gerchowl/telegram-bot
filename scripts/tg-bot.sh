@@ -147,6 +147,45 @@ tg_handle_update() {
   tg_run_command "$cmd" "$rest" "$chat"
 }
 
+# Auto-register the slash-command menu (Bot API setMyCommands) from the commands
+# dir: each executable's first `# desc: <text>` line becomes its menu description,
+# so the "/" autocomplete is populated straight from the scripts — no manual
+# BotFather /setcommands step. Opt out with TELEGRAM_SET_COMMANDS=0. No-op in
+# post-only mode or without a commands dir. Telegram requires command names to be
+# 1–32 chars of [a-z0-9_]; anything else (and `_`-prefixed hooks) is skipped.
+tg_register_commands() {
+  local tok="$1" dir="${TELEGRAM_COMMANDS_DIR:-}"
+  [ "${TELEGRAM_SET_COMMANDS:-1}" != 0 ] || return 0
+  [ "${TELEGRAM_POST_ONLY:-1}" != 1 ] || return 0
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+
+  local json="[]" f name desc
+  for f in "$dir"/*; do
+    [ -f "$f" ] && [ -x "$f" ] || continue
+    name="$(basename "$f")"
+    case "$name" in
+      _* | *[!a-z0-9_]*) continue ;;
+    esac
+    [ "${#name}" -le 32 ] || continue
+    desc="$(sed -n 's/^#[[:space:]]*desc:[[:space:]]*//p' "$f" | head -n1)"
+    [ -n "$desc" ] || continue
+    desc="${desc:0:256}" # Telegram caps descriptions at 256 chars
+    json="$(jq -c --arg c "$name" --arg d "$desc" '. + [{command:$c,description:$d}]' <<<"$json")"
+  done
+
+  [ "$json" != "[]" ] || return 0
+  local resp
+  resp="$(tg_api "$tok" setMyCommands --data-urlencode "commands=${json}")" || {
+    echo "tg-bot: setMyCommands request failed (network?)" >&2
+    return 0
+  }
+  if [ "$(jq -r '.ok // false' <<<"$resp")" = "true" ]; then
+    echo "tg-bot: registered $(jq 'length' <<<"$json") command(s) via setMyCommands" >&2
+  else
+    echo "tg-bot: setMyCommands failed: $(jq -r '.description // "unknown"' <<<"$resp")" >&2
+  fi
+}
+
 main() {
   tg_load_config
   local tok
@@ -161,6 +200,7 @@ main() {
 
   echo "tg-bot: starting (post_only=${TELEGRAM_POST_ONLY:-1}, commands_dir=${TELEGRAM_COMMANDS_DIR:-none}, allow=${TELEGRAM_ALLOWED_CHAT_IDS:-none})" >&2
   curl --silent --max-time 20 "$TG_API_BASE/bot${tok}/deleteWebhook" >/dev/null 2>&1 || true
+  tg_register_commands "$tok" # populate the "/" menu from the commands' `# desc:` lines
 
   while true; do
     set +e
