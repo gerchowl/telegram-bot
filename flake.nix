@@ -15,6 +15,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    guardrails.url = "github:gerchowl/guardrails";
   };
 
   outputs =
@@ -22,6 +23,7 @@
       self,
       nixpkgs,
       flake-utils,
+      guardrails,
     }:
     let
       inherit (nixpkgs) lib;
@@ -241,7 +243,12 @@
         # Building the tools = running shellcheck on every script, so this is a
         # real check. `e2e` runs the scripts against a localhost mock Telegram API.
         checks = {
-          inherit tg-send tg-bot tg-onboard tg-poll;
+          inherit
+            tg-send
+            tg-bot
+            tg-onboard
+            tg-poll
+            ;
           format = checkFormat;
           lint = checkLint;
           licenses = checkLicenses;
@@ -284,12 +291,35 @@
                 bash ${./tests/e2e.sh}
                 touch "$out"
               '';
+          # guardrails(local, dogfood): every Markdown surface must be generated, decorator-wrapped,
+          # or whitelisted in guardrails-allow.txt — no hand-prose that silently drifts from the
+          # code. Also runs the gate's own self-test (it must complain on prose, pass on wrapped).
+          docs-from-code =
+            pkgs.runCommand "telegram-bot-docs-from-code"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.coreutils
+                  pkgs.findutils
+                  pkgs.gnused
+                  pkgs.git
+                ];
+              }
+              ''
+                cp -r --no-preserve=mode ${./.} src
+                cd src
+                bash gates/docs-from-code.sh
+                bash tests/test-docs-from-code.sh "$PWD/gates/docs-from-code.sh"
+                touch "$out"
+              '';
         };
 
         formatter = treefmt;
 
-        devShells.default = pkgs.mkShell {
-          packages = [
+        devShells.default = guardrails.lib.${system}.mkDevShell {
+          inherit pkgs;
+          name = "telegram-bot-dev";
+          extra = [
             tg-send
             tg-bot
             tg-onboard
@@ -310,7 +340,7 @@
           ]
           ++ fmtInputs
           ++ lintInputs;
-          shellHook = ''
+          hook = ''
             echo "telegram-bot devshell — 'just' for tasks · 'nix fmt' · 'nix flake check' · 'prek install'."
           '';
         };
