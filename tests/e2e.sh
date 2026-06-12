@@ -120,7 +120,7 @@ want "pong hello" 'pong hello' "$MOCK_LOG"
 
 echo "== tg-bot: setMyCommands auto-registers the / menu from '# desc:' =="
 : >"$MOCK_LOG"
-start_mock  # no updates needed — registration happens at startup
+start_mock # no updates needed — registration happens at startup
 run_bot_until 'setMyCommands' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
 want "menu registered" 'setMyCommands' "$MOCK_LOG"
 want "ping desc from # desc:" 'liveness check' "$MOCK_LOG"
