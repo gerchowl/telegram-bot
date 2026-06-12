@@ -147,6 +147,33 @@ tg_handle_update() {
   tg_run_command "$cmd" "$rest" "$chat"
 }
 
+# Publish the command menu to Telegram (setMyCommands) so clients show autocomplete.
+# Descriptions come from a `# desc: ...` line in each command script (fallback: the name).
+# Only Telegram-valid names (lowercase [a-z0-9_], ≤32) are listed; others still dispatch,
+# they just don't appear in the menu. Best-effort: a failure here never stops the daemon.
+tg_register_commands() {
+  local tok="$1" dir="${TELEGRAM_COMMANDS_DIR:-}" f name desc resp arr
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  local items=()
+  while IFS= read -r f; do
+    name="$(basename "$f")"
+    case "$name" in *[!a-z0-9_]* | '') continue ;; esac
+    [ "${#name}" -le 32 ] || continue
+    desc="$(sed -n 's/^# *desc: *//p' "$f" | head -1)"
+    [ -n "$desc" ] || desc="run /$name"
+    desc="${desc:0:256}"
+    items+=("$(jq -nc --arg c "$name" --arg d "$desc" '{command:$c,description:$d}')")
+  done < <(find "$dir" -maxdepth 1 -type f -perm -u+x | sort)
+  [ "${#items[@]}" -gt 0 ] || return 0
+  arr="$(printf '%s\n' "${items[@]}" | jq -sc '.')"
+  resp="$(tg_api "$tok" setMyCommands --data-urlencode "commands=$arr")"
+  if [ "$(jq -r '.ok // false' <<<"$resp")" = "true" ]; then
+    echo "tg-bot: registered ${#items[@]} command(s) with setMyCommands" >&2
+  else
+    echo "tg-bot: setMyCommands failed: $(jq -r '.description // "?"' <<<"$resp")" >&2
+  fi
+}
+
 main() {
   tg_load_config
   local tok
@@ -161,6 +188,8 @@ main() {
 
   echo "tg-bot: starting (post_only=${TELEGRAM_POST_ONLY:-1}, commands_dir=${TELEGRAM_COMMANDS_DIR:-none}, allow=${TELEGRAM_ALLOWED_CHAT_IDS:-none})" >&2
   curl --silent --max-time 20 "$TG_API_BASE/bot${tok}/deleteWebhook" >/dev/null 2>&1 || true
+  # Auto-publish the command menu (command mode only); harmless if it fails.
+  [ "${TELEGRAM_POST_ONLY:-1}" = 1 ] || tg_register_commands "$tok" || true
 
   while true; do
     set +e
