@@ -15,6 +15,58 @@ pub fn api_base() -> String {
     env::var("TELEGRAM_API_BASE").unwrap_or_else(|_| "https://api.telegram.org".to_string())
 }
 
+/// Mask any `bot<id>:<token>` substring so the bot token never reaches a log or stderr.
+/// Telegram puts the token in the request *path*, so a ureq/network error Displays the full URL
+/// — scrub it before printing. Keeps the numeric bot id; replaces the secret with `<redacted>`.
+pub fn redact(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i..].starts_with(b"bot") {
+            let mut j = i + 3;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 3 && j < b.len() && b[j] == b':' {
+                let mut k = j + 1;
+                while k < b.len() && (b[k].is_ascii_alphanumeric() || b[k] == b'_' || b[k] == b'-')
+                {
+                    k += 1;
+                }
+                if k > j + 1 {
+                    out.extend_from_slice(&b[i..j]); // "bot" + numeric id
+                    out.extend_from_slice(b":<redacted>");
+                    i = k;
+                    continue;
+                }
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact;
+
+    #[test]
+    fn redacts_token_in_url() {
+        let s = "network error: https://api.telegram.org/bot123456:AbC-dEf_123/getUpdates: refused";
+        let r = redact(s);
+        assert!(!r.contains("AbC-dEf_123"), "token leaked: {r}");
+        assert!(r.contains("bot123456:<redacted>"), "wrong shape: {r}");
+        assert!(r.contains("/getUpdates: refused"), "over-redacted: {r}");
+    }
+
+    #[test]
+    fn leaves_plain_text_and_utf8_intact() {
+        assert_eq!(redact("robot online ✅"), "robot online ✅");
+    }
+}
+
 /// Non-secret config (chat id, sops file path, …). Mirrors the bash
 /// `config.env`, including its `export K="${K:-default}"` convention where an
 /// explicit environment variable always wins over the file's default.
@@ -175,7 +227,12 @@ impl Tg {
         let to = timeout_secs.to_string();
         self.post_form(
             "getUpdates",
-            &[("offset", off.as_str()), ("timeout", to.as_str())],
+            &[
+                ("offset", off.as_str()),
+                ("timeout", to.as_str()),
+                // include poll_answer so the _poll_answer hook can record non-anonymous votes
+                ("allowed_updates", r#"["message","poll_answer"]"#),
+            ],
         )
     }
 

@@ -58,6 +58,7 @@ class H(BaseHTTPRequestHandler):
             entry = {"method": method,
                      "chat_id": (params.get("chat_id") or [""])[0],
                      "text": (params.get("text") or [""])[0],
+                     "parse_mode": (params.get("parse_mode") or [""])[0],
                      "multipart": "_multipart" in params}
             logline(entry)
             return {"ok": True, "result": {"message_id": 1}}
