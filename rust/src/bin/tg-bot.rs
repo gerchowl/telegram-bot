@@ -72,6 +72,7 @@ fn run() -> anyhow::Result<()> {
         }
     );
     tg.delete_webhook();
+    register_commands(&tg, &cfg, post_only, commands_dir.as_deref());
 
     loop {
         let resp = match tg.get_updates(offset, 50) {
@@ -174,6 +175,76 @@ fn handle_update(
         return;
     }
     run_command(tg, &chat, cmd, rest, commands_dir, cmd_timeout);
+}
+
+/// Auto-register the `/` menu (Bot API setMyCommands) from each command's first
+/// `# desc:` line — same as the bash daemon. No-op in post-only mode, without a
+/// commands dir, or when `TELEGRAM_SET_COMMANDS=0`. Telegram command names must be
+/// 1–32 chars of `[a-z0-9_]`; others (and `_`-prefixed hooks) are skipped.
+fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Option<&str>) {
+    if cfg.get("TELEGRAM_SET_COMMANDS").as_deref() == Some("0") || post_only {
+        return;
+    }
+    let dir = match commands_dir {
+        Some(d) => d,
+        None => return,
+    };
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut entries: Vec<_> = rd.filter_map(Result::ok).collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut cmds: Vec<serde_json::Value> = Vec::new();
+    for e in entries {
+        let path = e.path();
+        if !is_executable_file(&path) {
+            continue;
+        }
+        let name = match e.file_name().into_string() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        if name.starts_with('_')
+            || name.is_empty()
+            || name.len() > 32
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            continue;
+        }
+        if let Some(desc) = read_desc(&path) {
+            cmds.push(serde_json::json!({"command": name, "description": desc}));
+        }
+    }
+    if cmds.is_empty() {
+        return;
+    }
+    let json = serde_json::Value::Array(cmds.clone()).to_string();
+    match tg.set_my_commands(&json) {
+        Ok(()) => eprintln!(
+            "tg-bot: registered {} command(s) via setMyCommands",
+            cmds.len()
+        ),
+        Err(e) => eprintln!("tg-bot: setMyCommands failed: {e:#}"),
+    }
+}
+
+/// First `# desc: <text>` line of a command script (≤256 chars), if any.
+fn read_desc(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix('#') {
+            if let Some(d) = rest.trim_start().strip_prefix("desc:") {
+                let d = d.trim();
+                if !d.is_empty() {
+                    return Some(d.chars().take(256).collect());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Command names must be a simple identifier — this is the control that keeps

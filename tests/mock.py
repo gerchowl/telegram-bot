@@ -61,6 +61,10 @@ class H(BaseHTTPRequestHandler):
                      "multipart": "_multipart" in params}
             logline(entry)
             return {"ok": True, "result": {"message_id": 1}}
+        if method == "setMyCommands":
+            logline({"method": "setMyCommands",
+                     "commands": (params.get("commands") or [""])[0]})
+            return {"ok": True, "result": True}
         if method == "fail":  # error-path endpoint
             return {"ok": False, "description": "Bad Request: simulated failure"}
         return {"ok": False, "description": f"unknown method {method}"}

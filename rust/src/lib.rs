@@ -197,6 +197,13 @@ impl Tg {
         Ok(())
     }
 
+    /// Register the `/` autocomplete menu. `commands_json` is a Bot API
+    /// `setMyCommands` array: `[{"command":"ping","description":"…"}]`.
+    pub fn set_my_commands(&self, commands_json: &str) -> Result<()> {
+        self.post_form("setMyCommands", &[("commands", commands_json)])?;
+        Ok(())
+    }
+
     pub fn send_document(
         &self,
         chat: &str,
