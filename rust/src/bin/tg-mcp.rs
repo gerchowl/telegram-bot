@@ -174,15 +174,27 @@ fn deliver(waiters: &Waiters, tok: u64, val: String) {
 }
 
 /// Resolve a pending ask: unblock the waiting agent, then "latch" the Telegram
-/// message — append the chosen answer and strip the buttons so it visibly reads
-/// as resolved (inline buttons have no native pressed state). `meta` is read
-/// before delivering so this can't race the handler's `cleanup`.
-fn resolve(r: &Router, tok: u64, choice: String) {
+/// message so the choice reads as made (inline buttons have no native pressed
+/// state). For a button tap we keep the buttons and check-mark the chosen one;
+/// for a free-text (buttonless) ask we append a "✅ <answer>" footer. `meta`
+/// and `opts` are read before delivering so this can't race the handler's
+/// `cleanup`.
+fn resolve(r: &Router, tok: u64, choice: String, chosen_idx: Option<usize>) {
     let m = r.meta.lock().unwrap().get(&tok).cloned();
+    let opts = r.opts.lock().unwrap().get(&tok).cloned();
     deliver(&r.waiters, tok, choice.clone());
-    if let Some((mid, text)) = m {
-        let latched = format!("{text}\n\n✅ <b>{}</b>", html_escape(&choice));
-        let _ = r.tg.edit_message_text(&r.chat, mid, &latched, Some("HTML"));
+    match (m, opts, chosen_idx) {
+        // Button tap → keep the keyboard, check-mark the chosen option.
+        (Some((mid, _)), Some(options), Some(idx)) if !options.is_empty() => {
+            let markup = build_keyboard_marked(tok, &options, idx);
+            let _ = r.tg.edit_message_reply_markup(&r.chat, mid, &markup);
+        }
+        // Free-text / no buttons → append a resolved footer.
+        (Some((mid, text)), _, _) => {
+            let latched = format!("{text}\n\n✅ <b>{}</b>", html_escape(&choice));
+            let _ = r.tg.edit_message_text(&r.chat, mid, &latched, Some("HTML"));
+        }
+        _ => {}
     }
 }
 
@@ -206,7 +218,7 @@ fn route_update(upd: &Value, r: &Router) {
                         .cloned();
                     if let Some(v) = val {
                         let _ = r.tg.answer_callback_query(cqid, Some(&format!("✅ {v}")));
-                        resolve(r, tok, v);
+                        resolve(r, tok, v, Some(idx));
                         return;
                     }
                 }
@@ -228,7 +240,7 @@ fn route_update(upd: &Value, r: &Router) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                resolve(r, tok, text);
+                resolve(r, tok, text, None);
             }
         }
     }
@@ -379,6 +391,23 @@ fn build_keyboard(tok: u64, options: &[String]) -> String {
         .iter()
         .enumerate()
         .map(|(i, o)| json!([{"text": o, "callback_data": format!("a:{tok}:{i}")}]))
+        .collect();
+    json!({ "inline_keyboard": rows }).to_string()
+}
+
+/// Same keyboard, but the chosen option gets a trailing ✅ — the "latch".
+fn build_keyboard_marked(tok: u64, options: &[String], chosen: usize) -> String {
+    let rows: Vec<Value> = options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let label = if i == chosen {
+                format!("{o} ✅")
+            } else {
+                o.clone()
+            };
+            json!([{"text": label, "callback_data": format!("a:{tok}:{i}")}])
+        })
         .collect();
     json!({ "inline_keyboard": rows }).to_string()
 }

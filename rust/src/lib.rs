@@ -315,6 +315,27 @@ impl Tg {
         Ok(())
     }
 
+    /// Replace only a message's inline keyboard (leave its text). Used to
+    /// check-mark the chosen option (e.g. "ship it ✅") while keeping the
+    /// buttons visible so the choice reads in context.
+    pub fn edit_message_reply_markup(
+        &self,
+        chat: &str,
+        message_id: i64,
+        reply_markup: &str,
+    ) -> Result<()> {
+        let mid = message_id.to_string();
+        self.post_form(
+            "editMessageReplyMarkup",
+            &[
+                ("chat_id", chat),
+                ("message_id", &mid),
+                ("reply_markup", reply_markup),
+            ],
+        )?;
+        Ok(())
+    }
+
     /// `get_updates` with a caller-chosen `allowed_updates` JSON array. The
     /// default `get_updates` requests `["message","poll_answer"]`; the MCP
     /// router needs `callback_query` (inline-button taps) too.
