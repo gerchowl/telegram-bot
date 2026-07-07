@@ -22,7 +22,8 @@
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -31,6 +32,44 @@ use std::thread;
 use std::time::Duration;
 
 use telegram_bot::{resolve_token, Config, Tg};
+
+/// An IPC connection — a local Unix socket (agents on the same host) or a TCP
+/// stream (remote agents reaching the central daemon over the tailnet). One
+/// enum so the request handler and client are transport-agnostic.
+enum Ipc {
+    Unix(UnixStream),
+    Tcp(TcpStream),
+}
+impl Ipc {
+    fn try_clone(&self) -> std::io::Result<Ipc> {
+        Ok(match self {
+            Ipc::Unix(s) => Ipc::Unix(s.try_clone()?),
+            Ipc::Tcp(s) => Ipc::Tcp(s.try_clone()?),
+        })
+    }
+}
+impl Read for Ipc {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Ipc::Unix(s) => s.read(buf),
+            Ipc::Tcp(s) => s.read(buf),
+        }
+    }
+}
+impl Write for Ipc {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Ipc::Unix(s) => s.write(buf),
+            Ipc::Tcp(s) => s.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Ipc::Unix(s) => s.flush(),
+            Ipc::Tcp(s) => s.flush(),
+        }
+    }
+}
 
 /// Correlation token for a pending `ask` — encoded into button `callback_data`
 /// and mapped from the sent `message_id` for cited replies.
@@ -122,7 +161,7 @@ fn run_daemon() -> Result<()> {
         meta: Arc::new(Mutex::new(HashMap::new())),
     });
 
-    // IPC server on its own thread.
+    // Local Unix socket — agents on THIS host.
     let sock = socket_path();
     if let Some(dir) = std::path::Path::new(&sock).parent() {
         std::fs::create_dir_all(dir).ok();
@@ -136,12 +175,35 @@ fn run_daemon() -> Result<()> {
             for stream in listener.incoming().flatten() {
                 let router = router.clone();
                 thread::spawn(move || {
-                    if let Err(e) = handle_ipc(stream, &router) {
+                    if let Err(e) = handle_ipc(Ipc::Unix(stream), &router) {
                         eprintln!("tg-mcp daemon: ipc error: {e:#}");
                     }
                 });
             }
         });
+    }
+
+    // Optional TCP listener — remote agents over the tailnet (central mode).
+    // TG_MCP_LISTEN=<addr:port>, e.g. the host's tailnet IP so only the tailnet
+    // can reach it. The wire protocol is identical to the Unix socket.
+    if let Ok(addr) = std::env::var("TG_MCP_LISTEN") {
+        match TcpListener::bind(&addr) {
+            Ok(tl) => {
+                eprintln!("tg-mcp daemon: TCP listening on {addr}");
+                let router = router.clone();
+                thread::spawn(move || {
+                    for stream in tl.incoming().flatten() {
+                        let router = router.clone();
+                        thread::spawn(move || {
+                            if let Err(e) = handle_ipc(Ipc::Tcp(stream), &router) {
+                                eprintln!("tg-mcp daemon: tcp ipc error: {e:#}");
+                            }
+                        });
+                    }
+                });
+            }
+            Err(e) => eprintln!("tg-mcp daemon: TCP bind {addr} failed: {e}"),
+        }
     }
 
     // Poll loop (main thread) — the single Telegram update consumer.
@@ -247,7 +309,7 @@ fn route_update(upd: &Value, r: &Router) {
 }
 
 /// One IPC request per connection: a single JSON object line in, one out.
-fn handle_ipc(stream: UnixStream, r: &Router) -> Result<()> {
+fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -465,9 +527,20 @@ fn run_mcp() -> Result<()> {
 }
 
 fn ipc_call(req: Value) -> Result<Value> {
-    let sock = socket_path();
-    let stream = UnixStream::connect(&sock)
-        .with_context(|| format!("connect {sock} — is the tg-mcp daemon running?"))?;
+    // TG_MCP_REMOTE=<host:port> → talk to the central daemon over the tailnet;
+    // otherwise the local Unix socket.
+    let stream = if let Ok(remote) = std::env::var("TG_MCP_REMOTE") {
+        Ipc::Tcp(
+            TcpStream::connect(&remote)
+                .with_context(|| format!("connect tg-mcp daemon at {remote}"))?,
+        )
+    } else {
+        let sock = socket_path();
+        Ipc::Unix(
+            UnixStream::connect(&sock)
+                .with_context(|| format!("connect {sock} — is the tg-mcp daemon running?"))?,
+        )
+    };
     let mut writer = stream.try_clone()?;
     writeln!(writer, "{req}")?;
     writer.flush()?;
