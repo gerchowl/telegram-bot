@@ -254,6 +254,67 @@ impl Tg {
         Ok(())
     }
 
+    /// Like `send_message` but returns the sent message's `message_id`, and
+    /// optionally attaches an inline keyboard (`reply_markup` = a JSON string,
+    /// e.g. `{"inline_keyboard":[[{"text":"A","callback_data":"…"}]]}`). The
+    /// `message_id` is the correlation key for reply-routing: a cited reply
+    /// carries it back in `reply_to_message.message_id`.
+    pub fn send_message_id(
+        &self,
+        chat: &str,
+        text: &str,
+        parse_mode: Option<&str>,
+        silent: bool,
+        reply_markup: Option<&str>,
+    ) -> Result<i64> {
+        let mut f: Vec<(&str, &str)> = vec![("chat_id", chat), ("text", text)];
+        if let Some(pm) = parse_mode {
+            f.push(("parse_mode", pm));
+        }
+        if silent {
+            f.push(("disable_notification", "true"));
+        }
+        if let Some(rm) = reply_markup {
+            f.push(("reply_markup", rm));
+        }
+        let resp = self.post_form("sendMessage", &f)?;
+        resp.pointer("/result/message_id")
+            .and_then(serde_json::Value::as_i64)
+            .context("sendMessage response missing result.message_id")
+    }
+
+    /// Acknowledge an inline-keyboard button tap so Telegram clears the
+    /// client-side spinner (otherwise the button shows a loading state).
+    pub fn answer_callback_query(&self, id: &str, text: Option<&str>) -> Result<()> {
+        let mut f: Vec<(&str, &str)> = vec![("callback_query_id", id)];
+        if let Some(t) = text {
+            f.push(("text", t));
+        }
+        self.post_form("answerCallbackQuery", &f)?;
+        Ok(())
+    }
+
+    /// `get_updates` with a caller-chosen `allowed_updates` JSON array. The
+    /// default `get_updates` requests `["message","poll_answer"]`; the MCP
+    /// router needs `callback_query` (inline-button taps) too.
+    pub fn get_updates_allowed(
+        &self,
+        offset: i64,
+        timeout_secs: u32,
+        allowed_updates: &str,
+    ) -> Result<serde_json::Value> {
+        let off = offset.to_string();
+        let to = timeout_secs.to_string();
+        self.post_form(
+            "getUpdates",
+            &[
+                ("offset", off.as_str()),
+                ("timeout", to.as_str()),
+                ("allowed_updates", allowed_updates),
+            ],
+        )
+    }
+
     /// Register the `/` autocomplete menu. `commands_json` is a Bot API
     /// `setMyCommands` array: `[{"command":"ping","description":"…"}]`.
     pub fn set_my_commands(&self, commands_json: &str) -> Result<()> {
