@@ -88,6 +88,9 @@ fn main() {
 type Waiters = Arc<Mutex<HashMap<u64, mpsc::Sender<String>>>>;
 type Msg2Tok = Arc<Mutex<HashMap<i64, u64>>>;
 type Opts = Arc<Mutex<HashMap<u64, Vec<String>>>>;
+/// tok → (sent message_id, its composed text) — for latching the message once
+/// answered (edit in the chosen answer + strip the buttons).
+type Meta = Arc<Mutex<HashMap<u64, (i64, String)>>>;
 
 struct Router {
     tg: Arc<Tg>,
@@ -95,6 +98,7 @@ struct Router {
     waiters: Waiters,
     msg2tok: Msg2Tok,
     opts: Opts,
+    meta: Meta,
 }
 
 fn run_daemon() -> Result<()> {
@@ -115,6 +119,7 @@ fn run_daemon() -> Result<()> {
         waiters: Arc::new(Mutex::new(HashMap::new())),
         msg2tok: Arc::new(Mutex::new(HashMap::new())),
         opts: Arc::new(Mutex::new(HashMap::new())),
+        meta: Arc::new(Mutex::new(HashMap::new())),
     });
 
     // IPC server on its own thread.
@@ -168,6 +173,19 @@ fn deliver(waiters: &Waiters, tok: u64, val: String) {
     }
 }
 
+/// Resolve a pending ask: unblock the waiting agent, then "latch" the Telegram
+/// message — append the chosen answer and strip the buttons so it visibly reads
+/// as resolved (inline buttons have no native pressed state). `meta` is read
+/// before delivering so this can't race the handler's `cleanup`.
+fn resolve(r: &Router, tok: u64, choice: String) {
+    let m = r.meta.lock().unwrap().get(&tok).cloned();
+    deliver(&r.waiters, tok, choice.clone());
+    if let Some((mid, text)) = m {
+        let latched = format!("{text}\n\n✅ <b>{}</b>", html_escape(&choice));
+        let _ = r.tg.edit_message_text(&r.chat, mid, &latched, Some("HTML"));
+    }
+}
+
 fn route_update(upd: &Value, r: &Router) {
     // Inline-button tap: callback_data = "a:{tok}:{idx}".
     if let Some(cq) = upd.get("callback_query") {
@@ -187,7 +205,9 @@ fn route_update(upd: &Value, r: &Router) {
                         .and_then(|o| o.get(idx))
                         .cloned();
                     if let Some(v) = val {
-                        deliver(&r.waiters, tok, v);
+                        let _ = r.tg.answer_callback_query(cqid, Some(&format!("✅ {v}")));
+                        resolve(r, tok, v);
+                        return;
                     }
                 }
             }
@@ -208,7 +228,7 @@ fn route_update(upd: &Value, r: &Router) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                deliver(&r.waiters, tok, text);
+                resolve(r, tok, text);
             }
         }
     }
@@ -283,6 +303,7 @@ fn handle_ipc(stream: UnixStream, r: &Router) -> Result<()> {
                     }
                 };
             r.msg2tok.lock().unwrap().insert(mid, tok);
+            r.meta.lock().unwrap().insert(tok, (mid, text.clone()));
 
             match rx.recv_timeout(Duration::from_secs(timeout)) {
                 Ok(ans) => {
@@ -318,6 +339,7 @@ fn handle_ipc(stream: UnixStream, r: &Router) -> Result<()> {
 fn cleanup(r: &Router, tok: u64) {
     r.waiters.lock().unwrap().remove(&tok);
     r.opts.lock().unwrap().remove(&tok);
+    r.meta.lock().unwrap().remove(&tok);
     r.msg2tok.lock().unwrap().retain(|_, v| *v != tok);
 }
 

@@ -294,6 +294,27 @@ impl Tg {
         Ok(())
     }
 
+    /// Replace a sent message's text (by `message_id`). Omitting `reply_markup`
+    /// removes any inline keyboard — used to "latch" an answered `ask`: append
+    /// the chosen answer and drop the buttons so it reads as resolved and can't
+    /// be tapped again.
+    pub fn edit_message_text(
+        &self,
+        chat: &str,
+        message_id: i64,
+        text: &str,
+        parse_mode: Option<&str>,
+    ) -> Result<()> {
+        let mid = message_id.to_string();
+        let mut f: Vec<(&str, &str)> =
+            vec![("chat_id", chat), ("message_id", &mid), ("text", text)];
+        if let Some(pm) = parse_mode {
+            f.push(("parse_mode", pm));
+        }
+        self.post_form("editMessageText", &f)?;
+        Ok(())
+    }
+
     /// `get_updates` with a caller-chosen `allowed_updates` JSON array. The
     /// default `get_updates` requests `["message","poll_answer"]`; the MCP
     /// router needs `callback_query` (inline-button taps) too.
