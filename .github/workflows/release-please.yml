@@ -24,7 +24,7 @@ jobs:
       # When a release is cut, archive the exact Rust dependency sources
       # (cargo vendor) and attach them — so the build stays reproducible
       # long-term even if a crate is later yanked/removed from crates.io.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         if: ${{ steps.release.outputs.release_created }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: ${{ steps.release.outputs.release_created }}
