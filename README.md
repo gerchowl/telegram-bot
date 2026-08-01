@@ -275,6 +275,44 @@ remain the default; the Rust build is opt-in until it's had more mileage.
 Could shrink further (rustls instead of native-tls drops openssl; musl static for a
 fully self-contained binary) — noted as future tuning.
 
+### MCP bridge (`tg-mcp`)
+
+The Rust crate also ships `tg-mcp` — a [Model Context Protocol](https://modelcontextprotocol.io)
+server that gives an agent (Claude Code, etc.) two tools over Telegram: **`notify`**
+(one-way status update) and **`ask`** (blocking question with one-tap inline-button
+options, routed back to the waiting agent). Exposed as the `mcp` flake app:
+
+```sh
+nix run github:gerchowl/telegram-bot#mcp            # stdio MCP client (for an agent)
+nix run github:gerchowl/telegram-bot#mcp -- daemon  # the central poll/route daemon
+```
+
+Two modes, one binary:
+
+- **daemon** (`tg-mcp daemon`) — owns the single Telegram `getUpdates` long-poll and
+  routes each answer back to the agent that asked. Bound to **one chat**, resolved
+  once at startup from `TG_CHAT_ID` or the config's `TELEGRAM_CHAT_ID`. Listens on a
+  local Unix socket (`TG_MCP_SOCK`, default `${XDG_RUNTIME_DIR:-~/.config/telegram-bot}/tg-mcp.sock`)
+  and, if `TG_MCP_LISTEN=<addr:port>` is set, a TCP socket for remote agents over a
+  tailnet.
+- **client** (no args) — the stdio MCP server an agent spawns; forwards `notify`/`ask`
+  to the daemon over the local socket, or over TCP when `TG_MCP_REMOTE=<addr:port>` is
+  set. The chat is the daemon's, not the client's — run one daemon per target chat and
+  point each project's client at the right one (give each daemon a distinct
+  `TG_MCP_LISTEN` port **and** `TG_MCP_SOCK` so they don't collide).
+
+Register it for Claude Code as an `mcpServers` entry (`~/.claude.json` for user scope,
+or a project `.mcp.json`):
+
+```json
+{ "mcpServers": { "tg": {
+  "type": "stdio",
+  "command": "nix",
+  "args": ["run", "github:gerchowl/telegram-bot#mcp"],
+  "env": { "TG_MCP_REMOTE": "100.x.y.z:8765" }
+} } }
+```
+
 ---
 
 ## Layout
