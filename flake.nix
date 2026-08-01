@@ -236,6 +236,13 @@
             type = "app";
             program = "${telegram-bot-rs}/bin/tg-bot";
           };
+          # MCP bridge (notify/ask) for Claude Code & other agents. No args =
+          # stdio client of a daemon (via TG_MCP_REMOTE or the local socket);
+          # `-- daemon` runs the central poll/route daemon. Rust-only.
+          mcp = {
+            type = "app";
+            program = "${telegram-bot-rs}/bin/tg-mcp";
+          };
           default = self.apps.${system}.onboard;
         };
 
