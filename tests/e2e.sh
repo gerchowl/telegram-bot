@@ -291,6 +291,39 @@ absent "the outside file was NOT uploaded" '"method": "sendDocument"' "$MOCK_LOG
 absent "its contents did not leak" 'SECRET-OUTSIDE' "$MOCK_LOG"
 want "the command's own output still gets through" 'escaped' "$MOCK_LOG"
 
+# A sibling directory whose name merely STARTS WITH the root's must not pass.
+# Path::starts_with compares whole components, so "$T/media-secret" is outside
+# "$T/media" — this pins that, and would fail if it ever became a string compare.
+mkdir -p "$T/media-secret"
+printf 'PREFIX-SIBLING-SECRET\n' >"$T/media-secret/x.txt"
+printf '#!%s\nprintf "\\001document=%s/media-secret/x.txt\\nprefix\\n"\n' "$bash_path" "$T" >"$COMMANDS/prefix"
+chmod +x "$COMMANDS/prefix"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/prefix"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'attachment refused' $media_env
+want "prefix-sibling dir is outside the root" 'outside TELEGRAM_MEDIA_ROOT' "$MOCK_LOG"
+absent "prefix-sibling contents did not leak" 'PREFIX-SIBLING-SECRET' "$MOCK_LOG"
+
+# A FIFO must be refused rather than blocking the daemon on open().
+mkfifo "$T/media/pipe" 2>/dev/null || true
+printf '#!%s\nprintf "\\001document=%s/media/pipe\\nfifo\\n"\n' "$bash_path" "$T" >"$COMMANDS/fifo"
+chmod +x "$COMMANDS/fifo"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/fifo"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'attachment refused' $media_env
+want "a FIFO is refused, not opened" 'not a regular file' "$MOCK_LOG"
+
+# CRLF output must not leave a stray \r inside the sentinel value.
+printf '#!%s\nprintf "\\001document=%s/media/report.txt\\r\\ncrlf\\r\\n"\n' "$bash_path" "$T" >"$COMMANDS/crlf"
+chmod +x "$COMMANDS/crlf"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/crlf"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'sendDocument' $media_env
+want "CRLF sentinel still resolves" '"method": "sendDocument"' "$MOCK_LOG"
+
 # A symlink inside the root pointing out of it must not defeat the check.
 ln -sf "$T/outside-secret.txt" "$T/media/link.txt"
 printf '#!%s\nprintf "\\001document=%s/media/link.txt\\nvia link\\n"\n' "$bash_path" "$T" >"$COMMANDS/vialink"
@@ -318,7 +351,7 @@ printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"privat
 start_mock "$T/u.json"
 run_bot_until 'sendDocument' $media_env
 want "parse_mode applies to the caption" '"parse_mode": "HTML"' "$MOCK_LOG"
-rm -f "$COMMANDS/report" "$COMMANDS/shot" "$COMMANDS/escape" "$COMMANDS/noroot" "$COMMANDS/vialink" "$COMMANDS/both"
+rm -f "$COMMANDS/report" "$COMMANDS/shot" "$COMMANDS/escape" "$COMMANDS/noroot" "$COMMANDS/vialink" "$COMMANDS/both" "$COMMANDS/prefix" "$COMMANDS/fifo" "$COMMANDS/crlf"
 
 echo "== tg-bot: _poll_answer hook =="
 printf '#!%s\necho "vote $POLL_OPTIONS by $POLL_VOTER on $POLL_ID"\n' "$bash_path" >"$COMMANDS/_poll_answer"

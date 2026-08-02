@@ -16,7 +16,11 @@ use telegram_bot::{redact, resolve_token, Config, Tg};
 use wait_timeout::ChildExt;
 
 const TG_LIMIT: usize = 3900; // headroom under Telegram's 4096-char cap
-const CAPTION_LIMIT: usize = 1024; // Telegram's cap on a media caption
+                              // Telegram's caption cap is 1024, counted in UTF-16 code units while we count
+                              // Unicode scalars — an emoji-heavy caption counts double there. Same headroom
+                              // approach as TG_LIMIT, so we split to a follow-up message before Telegram
+                              // rejects the upload outright.
+const CAPTION_LIMIT: usize = 900;
 const MAX_UPLOAD: u64 = 50_000_000; // Telegram's bot-API upload cap
 
 fn main() {
@@ -356,21 +360,23 @@ fn run_command(
             Ok((bytes, name)) => {
                 // Telegram caps captions well below the message limit; longer
                 // output would be rejected outright, so send it separately.
-                let (caption, leftover) = if msg.chars().count() <= CAPTION_LIMIT {
-                    (msg.clone(), String::new())
+                let short = msg.chars().count() <= CAPTION_LIMIT;
+                let (caption, leftover) = if short {
+                    (msg.as_str(), "")
                 } else {
-                    (String::new(), msg.clone())
+                    ("", msg.as_str())
                 };
                 let cap = if caption.is_empty() {
                     None
                 } else {
-                    Some(caption.as_str())
+                    Some(caption)
                 };
                 let res = if kind == "photo" {
                     tg.send_photo(chat, &name, &bytes, cap, parse_mode.as_deref(), false)
                 } else {
                     tg.send_document(chat, &name, &bytes, cap, parse_mode.as_deref(), false)
                 };
+                let leftover = leftover.to_string();
                 match res {
                     Ok(()) => {
                         if !leftover.is_empty() {
@@ -413,8 +419,10 @@ fn take_sentinels(msg: &mut String) -> Vec<(String, String)> {
     let mut found = Vec::new();
     while let Some(rest) = msg.strip_prefix('\u{1}') {
         let (line, after) = match rest.split_once('\n') {
-            Some((l, a)) => (l.to_string(), a.to_string()),
-            None => (rest.to_string(), String::new()),
+            // Tolerate CRLF: a command emitting \r\n would otherwise leave the
+            // \r inside the value, so a path silently becomes "no such file".
+            Some((l, a)) => (l.trim_end_matches('\r').to_string(), a.to_string()),
+            None => (rest.trim_end_matches('\r').to_string(), String::new()),
         };
         let (k, v) = match line.split_once('=') {
             Some((k, v)) => (k.to_string(), v.to_string()),
@@ -446,7 +454,18 @@ fn resolve_media(path: &str) -> Result<(Vec<u8>, String), String> {
     if !real.starts_with(&root) {
         return Err("path is outside TELEGRAM_MEDIA_ROOT".into());
     }
-    let meta = std::fs::metadata(&real).map_err(|_| "cannot stat file".to_string())?;
+    // Reject a non-regular file (FIFO, device) BEFORE opening it — opening a
+    // FIFO for reading blocks until a writer appears, which would wedge the
+    // daemon. symlink_metadata doesn't re-resolve, so this describes exactly
+    // the leaf canonicalize landed on.
+    let pre = std::fs::symlink_metadata(&real).map_err(|_| "cannot stat file".to_string())?;
+    if !pre.is_file() {
+        return Err("not a regular file".into());
+    }
+    // Size and type are then checked against the OPEN handle, not the path, so
+    // a swap between the check and the read can't redirect us.
+    let f = std::fs::File::open(&real).map_err(|_| "cannot read file".to_string())?;
+    let meta = f.metadata().map_err(|_| "cannot stat file".to_string())?;
     if !meta.is_file() {
         return Err("not a regular file".into());
     }
@@ -457,7 +476,10 @@ fn resolve_media(path: &str) -> Result<(Vec<u8>, String), String> {
             MAX_UPLOAD / 1_000_000
         ));
     }
-    let bytes = std::fs::read(&real).map_err(|_| "cannot read file".to_string())?;
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    let mut capped = std::io::Read::take(f, MAX_UPLOAD);
+    std::io::Read::read_to_end(&mut capped, &mut bytes)
+        .map_err(|_| "cannot read file".to_string())?;
     let name = real
         .file_name()
         .and_then(|s| s.to_str())

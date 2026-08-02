@@ -191,8 +191,10 @@ a **buggy** one: a script that interpolates a Telegram-supplied argument into a
 path would otherwise turn `/report ../../etc/shadow` into an arbitrary-file read.
 Keep the root a directory the bot owns and writes into.
 
-Files over Telegram's 50 MB bot-upload cap are refused. Use `document` unless you
-specifically want inline rendering — `photo` re-encodes and downscales.
+Files over Telegram's 50 MB bot-upload cap are refused, as are non-regular files
+(a FIFO would otherwise block the daemon on `open`). If a key repeats, the first
+occurrence wins. Use `document` unless you specifically want inline rendering —
+`photo` re-encodes and downscales.
 
 ### The `/` menu and `/help` (auto-registered)
 
