@@ -9,7 +9,7 @@ default:
 fmt:
     nix fmt
 
-# full gate: shellcheck · format · lint · licenses · e2e (bash+rust) · modules
+# full gate: format · lint · licenses · e2e · e2e-onboard · docs-from-code
 check:
     nix flake check -L
 
@@ -25,12 +25,12 @@ send *ARGS:
 poll *ARGS:
     nix run .#poll -- {{ ARGS }}
 
-# run the bash daemon
+# run the polling daemon
 bot:
     nix run .#bot
 
-# build the Rust v2 binaries (tg-send, tg-bot) and show them
-build-rs:
+# build the binaries and show them
+build:
     nix build .#telegram-bot-rs && ls -l result/bin
 
 # run cargo in the Rust crate, e.g. `just cargo build --release` or `just cargo clippy`
@@ -45,6 +45,6 @@ vendor:
 audit:
     cd rust && cargo audit
 
-# runtime closure sizes: rust v2 vs bash daemon
+# runtime closure size of the shipped artifact
 sizes:
-    nix path-info -Sh .#telegram-bot-rs .#tg-bot
+    nix path-info -Sh .#telegram-bot-rs
