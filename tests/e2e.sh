@@ -161,6 +161,41 @@ run_bot_until 'setMyCommands' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELE
 want "menu registered" 'setMyCommands' "$MOCK_LOG"
 want "ping desc from # desc:" 'liveness check' "$MOCK_LOG"
 
+echo "== tg-bot: /help lists custom commands with their '# desc:' =="
+# Same source of truth as the / menu: a command with a desc shows it, one
+# without still lists, and `_`-prefixed hooks are not user commands at all.
+printf '#!%s\necho nodesc\n' "$bash_path" >"$COMMANDS/plain"
+chmod +x "$COMMANDS/plain"
+printf '#!%s\necho hook\n' "$bash_path" >"$COMMANDS/_hidden"
+chmod +x "$COMMANDS/_hidden"
+# Invokable but not menu-eligible: valid_cmd allows uppercase and '-', Telegram
+# does not. /help must still list it, or it becomes unfindable.
+printf '#!%s\necho dashy\n' "$bash_path" >"$COMMANDS/deploy-prod"
+chmod +x "$COMMANDS/deploy-prod"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/help"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'Custom commands' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+# Scope these to the sendMessage payload: the descriptions also appear in the
+# setMyCommands call made at startup, so matching the whole log would pass even
+# if /help still printed bare names.
+sent="$T/help-sent"
+grep '"method": "sendMessage"' "$MOCK_LOG" >"$sent"
+want "ping shows its description in /help" 'liveness check' "$sent"
+want "status shows its description in /help" 'report host status' "$sent"
+# /ping padded to the width of the longest name (/status) so the descriptions
+# line up. The mock logs JSON, which escapes the em dash — match the padding.
+want "names are padded into a column" '/ping   ' "$sent"
+want "a command without a desc still lists" '/plain' "$sent"
+absent "_-prefixed hooks are not listed as commands" '/_hidden' "$sent"
+want "invokable-but-not-menu-eligible command still listed" '/deploy-prod' "$sent"
+# ...and the / menu must still exclude it, since Telegram would reject the name.
+: >"$MOCK_LOG"
+start_mock
+run_bot_until 'setMyCommands' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+absent "menu excludes a name Telegram would reject" 'deploy-prod' "$MOCK_LOG"
+rm -f "$COMMANDS/plain" "$COMMANDS/_hidden" "$COMMANDS/deploy-prod"
+
 echo "== tg-bot: setMyCommands opt-out (TELEGRAM_SET_COMMANDS=0) =="
 : >"$MOCK_LOG"
 printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/ping hi"}}]\n' >"$T/u.json"

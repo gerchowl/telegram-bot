@@ -193,35 +193,16 @@ fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Optio
         Some(d) => d,
         None => return,
     };
-    let rd = match std::fs::read_dir(dir) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    let mut entries: Vec<_> = rd.filter_map(Result::ok).collect();
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    let mut cmds: Vec<serde_json::Value> = Vec::new();
-    for e in entries {
-        let path = e.path();
-        if !is_executable_file(&path) {
-            continue;
-        }
-        let name = match e.file_name().into_string() {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-        if name.starts_with('_')
-            || name.is_empty()
-            || name.len() > 32
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        {
-            continue;
-        }
-        if let Some(desc) = read_desc(&path) {
-            cmds.push(serde_json::json!({"command": name, "description": desc}));
-        }
-    }
+    // The menu is a subset of what /help shows: Telegram requires a description
+    // per entry and rejects names outside [a-z0-9_]. A `/Deploy-Prod` command
+    // stays invokable and listed in /help, it just can't be in the menu.
+    let cmds: Vec<serde_json::Value> = list_commands(dir)
+        .into_iter()
+        .filter(|(name, _)| menu_eligible(name))
+        .filter_map(|(name, desc)| {
+            desc.map(|d| serde_json::json!({"command": name, "description": d}))
+        })
+        .collect();
     if cmds.is_empty() {
         return;
     }
@@ -236,6 +217,51 @@ fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Optio
             redact(&format!("{e:#}"))
         ),
     }
+}
+
+/// Telegram only accepts 1–32 chars of `[a-z0-9_]` for a `setMyCommands` entry.
+/// `valid_cmd` is deliberately wider (it also allows uppercase and `-`), so a
+/// command can be invokable without being menu-eligible — `/help` lists those,
+/// the `/` menu can't.
+fn menu_eligible(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Every command a user can actually invoke, sorted, each paired with its
+/// `# desc:` line where the script has one. Single source of truth for both the
+/// `/` menu and `/help`, so the two can't disagree about what exists.
+///
+/// Skips non-executables and `_`-prefixed hooks (`_poll_answer` is invoked by
+/// the daemon, never typed). The filter is `valid_cmd` — the same rule the
+/// dispatcher uses — so anything listed here is genuinely runnable.
+fn list_commands(dir: &str) -> Vec<(String, Option<String>)> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let mut entries: Vec<_> = rd.filter_map(Result::ok).collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut out = Vec::new();
+    for e in entries {
+        let path = e.path();
+        if !is_executable_file(&path) {
+            continue;
+        }
+        let name = match e.file_name().into_string() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        if name.starts_with('_') || !valid_cmd(&name) {
+            continue;
+        }
+        let desc = read_desc(&path);
+        out.push((name, desc));
+    }
+    out
 }
 
 /// First `# desc: <text>` line of a command script (≤256 chars), if any.
@@ -456,17 +482,23 @@ fn help_text(post_only: bool, commands_dir: Option<&str>) -> String {
     );
     match (post_only, commands_dir) {
         (false, Some(d)) => {
-            if let Ok(rd) = std::fs::read_dir(d) {
-                let mut names: Vec<String> = rd
-                    .filter_map(Result::ok)
-                    .filter(|e| is_executable_file(&e.path()))
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .collect();
-                names.sort();
-                if !names.is_empty() {
-                    t.push_str("\nCustom commands:");
-                    for n in names {
-                        t.push_str(&format!("\n  /{n}"));
+            let cmds = list_commands(d);
+            if !cmds.is_empty() {
+                // Pad names into a column so the descriptions line up, the way
+                // the built-ins above already do.
+                let width = cmds
+                    .iter()
+                    .map(|(n, _)| n.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                t.push_str("\nCustom commands:");
+                for (n, desc) in cmds {
+                    match desc {
+                        Some(d) => {
+                            let pad = " ".repeat(width - n.chars().count());
+                            t.push_str(&format!("\n  /{n}{pad} — {d}"));
+                        }
+                        None => t.push_str(&format!("\n  /{n}")),
                     }
                 }
             }
