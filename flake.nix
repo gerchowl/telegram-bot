@@ -211,30 +211,28 @@
             telegram-bot
             telegram-bot-rs
             ;
-          default = telegram-bot;
+          # The compiled implementation is the artifact (#22): `nix run
+          # github:gerchowl/telegram-bot#send` and friends resolve to binaries,
+          # not a curl/jq/sops shell closure.
+          default = telegram-bot-rs;
         };
 
         apps = {
           onboard = {
             type = "app";
-            program = "${tg-onboard}/bin/tg-onboard";
+            program = "${telegram-bot-rs}/bin/tg-onboard";
           };
           send = {
             type = "app";
-            program = "${tg-send}/bin/tg-send";
+            program = "${telegram-bot-rs}/bin/tg-send";
           };
           bot = {
             type = "app";
-            program = "${tg-bot}/bin/tg-bot";
-          };
-          # Rust (v2) entrypoints.
-          send-rs = {
-            type = "app";
-            program = "${telegram-bot-rs}/bin/tg-send";
-          };
-          bot-rs = {
-            type = "app";
             program = "${telegram-bot-rs}/bin/tg-bot";
+          };
+          poll = {
+            type = "app";
+            program = "${telegram-bot-rs}/bin/tg-poll";
           };
           # MCP bridge (notify/ask) for Claude Code & other agents. No args =
           # stdio client of a daemon (via TG_MCP_REMOTE or the local socket);

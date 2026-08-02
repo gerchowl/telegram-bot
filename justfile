@@ -17,9 +17,13 @@ check:
 onboard:
     nix run .#onboard
 
-# send a message via the bash CLI, e.g. `just send "hello"`
+# send a message, e.g. `just send "hello"`
 send *ARGS:
     nix run .#send -- {{ ARGS }}
+
+# send a poll; prints the poll id, e.g. `just poll "Deploy?" yes no`
+poll *ARGS:
+    nix run .#poll -- {{ ARGS }}
 
 # run the bash daemon
 bot:
