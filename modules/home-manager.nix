@@ -22,8 +22,8 @@ in
 {
   options.services.telegram-bot = {
     enable = mkEnableOption "Telegram bot polling daemon (user service)";
-    package = mkPackageOption self.packages.${pkgs.stdenv.hostPlatform.system} "tg-bot" {
-      default = [ "tg-bot" ];
+    package = mkPackageOption self.packages.${pkgs.stdenv.hostPlatform.system} "telegram-bot-rs" {
+      default = [ "telegram-bot-rs" ];
       pkgsText = "telegram-bot.packages.\${system}";
     };
     tokenFile = mkOption {
