@@ -158,7 +158,7 @@ TELEGRAM_COMMANDS_DIR="$PWD/commands" \
 
 Then message `/deploy` from your chat. (See `commands/ping` and `commands/status`.)
 
-### The `/` menu (auto-registered)
+### The `/` menu and `/help` (auto-registered)
 
 Give a command a `# desc:` line and `tg-bot` registers the Telegram **`/` autocomplete
 menu** for you on startup (Bot API `setMyCommands`) — no manual BotFather `/setcommands`:
@@ -170,8 +170,20 @@ set -euo pipefail
 systemctl restart myapp && echo "restarted ✅"
 ```
 
-Only commands with a `# desc:` are listed; names must be Telegram-valid (`[a-z0-9_]`,
-≤32 chars). Set `TELEGRAM_SET_COMMANDS=0` to opt out (e.g. if you manage the menu by hand).
+The same `# desc:` is what `/help` prints, so the two can't disagree:
+
+```
+Custom commands:
+  /deploy — restart myapp
+  /ping   — liveness check
+  /status — report host status (uptime, load, disk)
+```
+
+Names must be Telegram-valid (`[a-z0-9_]`, ≤32 chars) and `_`-prefixed files are
+hooks (`_poll_answer`), not commands — neither surface lists them. A command with
+no `# desc:` still appears in `/help` but is left out of the `/` menu, which
+requires a description per entry. Set `TELEGRAM_SET_COMMANDS=0` to opt out of the
+menu (e.g. if you manage it by hand); `/help` is unaffected.
 
 ---
 

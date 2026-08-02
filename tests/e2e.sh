@@ -161,6 +161,26 @@ run_bot_until 'setMyCommands' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELE
 want "menu registered" 'setMyCommands' "$MOCK_LOG"
 want "ping desc from # desc:" 'liveness check' "$MOCK_LOG"
 
+echo "== tg-bot: /help lists custom commands with their '# desc:' =="
+# Same source of truth as the / menu: a command with a desc shows it, one
+# without still lists, and `_`-prefixed hooks are not user commands at all.
+printf '#!%s\necho nodesc\n' "$bash_path" >"$COMMANDS/plain"
+chmod +x "$COMMANDS/plain"
+printf '#!%s\necho hook\n' "$bash_path" >"$COMMANDS/_hidden"
+chmod +x "$COMMANDS/_hidden"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/help"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'Custom commands' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+want "ping shows its description" 'liveness check' "$MOCK_LOG"
+want "status shows its description" 'report host status' "$MOCK_LOG"
+# /ping padded to the width of the longest name (/status) so the descriptions
+# line up. The mock logs JSON, which escapes the em dash — match the padding.
+want "names are padded into a column" '/ping   ' "$MOCK_LOG"
+want "a command without a desc still lists" '/plain' "$MOCK_LOG"
+absent "_-prefixed hooks are not listed as commands" '/_hidden' "$MOCK_LOG"
+rm -f "$COMMANDS/plain" "$COMMANDS/_hidden"
+
 echo "== tg-bot: setMyCommands opt-out (TELEGRAM_SET_COMMANDS=0) =="
 : >"$MOCK_LOG"
 printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/ping hi"}}]\n' >"$T/u.json"

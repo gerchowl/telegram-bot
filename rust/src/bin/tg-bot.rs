@@ -193,13 +193,45 @@ fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Optio
         Some(d) => d,
         None => return,
     };
+    // Only commands that document themselves reach the `/` menu — Telegram
+    // requires a description per entry.
+    let cmds: Vec<serde_json::Value> = list_commands(dir)
+        .into_iter()
+        .filter_map(|(name, desc)| {
+            desc.map(|d| serde_json::json!({"command": name, "description": d}))
+        })
+        .collect();
+    if cmds.is_empty() {
+        return;
+    }
+    let json = serde_json::Value::Array(cmds.clone()).to_string();
+    match tg.set_my_commands(&json) {
+        Ok(()) => eprintln!(
+            "tg-bot: registered {} command(s) via setMyCommands",
+            cmds.len()
+        ),
+        Err(e) => eprintln!(
+            "tg-bot: setMyCommands failed: {}",
+            redact(&format!("{e:#}"))
+        ),
+    }
+}
+
+/// The commands a user can invoke, sorted, each paired with its `# desc:` line
+/// where the script has one. Single source of truth for both the `/` menu and
+/// `/help`, so the two can't disagree about what exists.
+///
+/// Skips non-executables, `_`-prefixed hooks (`_poll_answer` is invoked by the
+/// daemon, not typed by a user) and anything Telegram would reject as a command
+/// name: 1–32 chars of `[a-z0-9_]`.
+fn list_commands(dir: &str) -> Vec<(String, Option<String>)> {
     let rd = match std::fs::read_dir(dir) {
         Ok(r) => r,
-        Err(_) => return,
+        Err(_) => return Vec::new(),
     };
     let mut entries: Vec<_> = rd.filter_map(Result::ok).collect();
     entries.sort_by_key(std::fs::DirEntry::file_name);
-    let mut cmds: Vec<serde_json::Value> = Vec::new();
+    let mut out = Vec::new();
     for e in entries {
         let path = e.path();
         if !is_executable_file(&path) {
@@ -218,24 +250,10 @@ fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Optio
         {
             continue;
         }
-        if let Some(desc) = read_desc(&path) {
-            cmds.push(serde_json::json!({"command": name, "description": desc}));
-        }
+        let desc = read_desc(&path);
+        out.push((name, desc));
     }
-    if cmds.is_empty() {
-        return;
-    }
-    let json = serde_json::Value::Array(cmds.clone()).to_string();
-    match tg.set_my_commands(&json) {
-        Ok(()) => eprintln!(
-            "tg-bot: registered {} command(s) via setMyCommands",
-            cmds.len()
-        ),
-        Err(e) => eprintln!(
-            "tg-bot: setMyCommands failed: {}",
-            redact(&format!("{e:#}"))
-        ),
-    }
+    out
 }
 
 /// First `# desc: <text>` line of a command script (≤256 chars), if any.
@@ -456,17 +474,23 @@ fn help_text(post_only: bool, commands_dir: Option<&str>) -> String {
     );
     match (post_only, commands_dir) {
         (false, Some(d)) => {
-            if let Ok(rd) = std::fs::read_dir(d) {
-                let mut names: Vec<String> = rd
-                    .filter_map(Result::ok)
-                    .filter(|e| is_executable_file(&e.path()))
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .collect();
-                names.sort();
-                if !names.is_empty() {
-                    t.push_str("\nCustom commands:");
-                    for n in names {
-                        t.push_str(&format!("\n  /{n}"));
+            let cmds = list_commands(d);
+            if !cmds.is_empty() {
+                // Pad names into a column so the descriptions line up, the way
+                // the built-ins above already do.
+                let width = cmds
+                    .iter()
+                    .map(|(n, _)| n.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                t.push_str("\nCustom commands:");
+                for (n, desc) in cmds {
+                    match desc {
+                        Some(d) => {
+                            let pad = " ".repeat(width - n.chars().count());
+                            t.push_str(&format!("\n  /{n}{pad} — {d}"));
+                        }
+                        None => t.push_str(&format!("\n  /{n}")),
                     }
                 }
             }
