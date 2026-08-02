@@ -1,5 +1,7 @@
 # telegram-bot
 
+<!-- guardrails-ok-begin: what the project is and the one manual BotFather step — intent, not derivable from code -->
+
 A small, general-purpose Telegram bot you drop into any project as a **notification
 and control channel**. One flake gives you:
 
@@ -25,7 +27,11 @@ still be in any language.
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## Quick start
+
+<!-- guardrails-ok-begin: onboarding narrative; the commands are in fenced blocks -->
 
 From inside the project you want notifications for:
 
@@ -56,7 +62,11 @@ have one. Keep that file private (it decrypts the token); it is **not** in the r
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## `tg-send`
+
+<!-- guardrails-ok-begin: resolution-order explanation; the usage block is the arg parser's own text -->
 
 ```
 tg-send [options] [message]
@@ -85,7 +95,11 @@ tg-send -p MarkdownV2 "*alert*: disk full on \`$(hostname)\`"
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## `tg-poll`
+
+<!-- guardrails-ok-begin: why polls default to non-anonymous — a Telegram API constraint -->
 
 ```
 tg-poll [options] "Question" "Option 1" "Option 2" [...]
@@ -109,7 +123,11 @@ daemon invokes it with `$POLL_ID`, `$POLL_VOTER` and `$POLL_OPTIONS`.
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## Commands & rights (the `tg-bot` daemon)
+
+<!-- guardrails-ok-begin: the rights model and its rationale — the security contract this project exists to state -->
 
 `tg-bot` long-polls Telegram. It always answers the built-ins **`/start`**, **`/id`**,
 **`/help`**. Beyond that it is **safe by default**:
@@ -225,7 +243,11 @@ menu (e.g. if you manage it by hand); `/help` is unaffected.
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## NixOS service
+
+<!-- guardrails-ok-begin: deployment guidance and secret-management pairing; the option table below is generated -->
 
 The module takes a **`tokenFile`** path and stays agnostic about *how* it's decrypted
 — pair it with [sops-nix](https://github.com/Mic92/sops-nix) or
@@ -279,16 +301,57 @@ Other tooling on the host sends notifications by putting the package on the path
 (`environment.systemPackages = [ telegram-bot.packages.${system}.default ];`) — you
 don't need the daemon enabled just to *send*.
 
-### Module options (highlights)
+### Module options
 
-`enable`, `tokenFile`, `chatId`, `postOnly` (default true), `allowedChatIds`,
-`commands` (attr→script) / `commandsDir`, `commandRuntimeInputs`, `commandTimeout`,
-`user`/`group`/`stateDir`, `environmentFile`, `extraEnvironment`, `hardening`
-(default true), `extraServiceConfig`.
+<!-- generated: bash gates/gen-module-options.sh -->
+**`services.telegram-bot (NixOS)`**
+
+| option | default | description |
+|--------|---------|-------------|
+| `enable` | `false` | Telegram bot polling daemon (tg-bot) |
+| `package` | `telegram-bot-rs` | Package providing `bin/tg-bot`. |
+| `tokenFile` | `null` | Path to a file containing **only** the bot token. |
+| `chatId` | `null` | Default chat id used by tg-send / built-in replies. |
+| `postOnly` | `true` | When true the bot only sends messages and answers built-ins (/start, /id, /help); all inbound commands are refused. |
+| `allowedChatIds` | `[ ]` | Chat ids permitted to run commands. Empty ⇒ nobody is authorized. |
+| `commands` | `{ }` | Map of command name → shell script body. Each becomes /name. |
+| `commandsDir` | `null` | Alternative to {option}`commands`: a directory of executables. Ignored if `commands` is set. |
+| `commandRuntimeInputs` | `[ ]` | Packages available on PATH to scripts defined via {option}`commands`. |
+| `commandTimeout` | `60` | Per-command timeout in seconds. |
+| `user` | `"telegram-bot"` | User the daemon runs as. |
+| `group` | `"telegram-bot"` | Group the daemon runs as. |
+| `stateDir` | `"/var/lib/telegram-bot"` | Where the long-poll offset is persisted. |
+| `environmentFile` | `null` | Extra EnvironmentFile (e.g. for TELEGRAM_BOT_TOKEN directly instead of tokenFile). |
+| `extraEnvironment` | `{ }` | Extra environment variables for the service. |
+| `hardening` | `true` | Apply a strict systemd sandbox. |
+| `extraServiceConfig` | `{ }` | Merged into systemd serviceConfig (wins over defaults). |
+
+**`services.telegram-bot (Home-Manager)`**
+
+| option | default | description |
+|--------|---------|-------------|
+| `enable` | `false` | Telegram bot polling daemon (user service) |
+| `package` | `telegram-bot-rs` | Package providing `bin/tg-bot`. |
+| `tokenFile` | `null` | Path to a file containing only the bot token. |
+| `chatId` | `null` | Default chat id. |
+| `postOnly` | `true` | Send-only when true; enable the command runner when false. |
+| `allowedChatIds` | `[ ]` | Chat ids allowed to run commands (empty ⇒ none). |
+| `commands` | `{ }` | Map of command name → shell script body. Each becomes /name. |
+| `commandsDir` | `null` | Alternative to {option}`commands`: a directory of executables. Ignored if `commands` is set. |
+| `commandRuntimeInputs` | `[ ]` | Packages available on PATH to scripts defined via {option}`commands`. |
+| `commandTimeout` | `60` | Per-command timeout in seconds. |
+| `extraEnvironment` | `{ }` | Extra environment variables. |
+| `logDir` | `null` | darwin only: directory for the agent's stdout/stderr logs. |
+
+<!-- /generated -->
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## Home-Manager
+
+<!-- guardrails-ok-begin: platform differences and why logDir exists — launchd has no journal -->
 
 ```nix
 imports = [ telegram-bot.homeManagerModules.default ];
@@ -311,7 +374,11 @@ On Linux use `journalctl --user -u telegram-bot`.
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## Downstream `mkSend` helper
+
+<!-- guardrails-ok-begin: usage note for the lib helper -->
 
 Bake a config path into a ready-to-use `tg-send` for a project's devshell:
 
@@ -322,7 +389,11 @@ in pkgs.mkShell { packages = [ send ]; };
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## Implementation
+
+<!-- guardrails-ok-begin: why bash was removed and what the closure costs — history, not state -->
 
 Every tool is one compiled Rust crate (`rust/`), built by the flake as
 `packages.telegram-bot-rs` — also `packages.default`, and `packages.telegram-bot`
@@ -407,25 +478,32 @@ so symlinks pointing out of the root are rejected.
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## Layout
 
+<!-- generated: bash gates/gen-layout.sh -->
 ```
-flake.nix                 packages · apps · nixos/home modules · template · lib.mkSend
-rust/src/lib.rs           shared: config load, token resolution, Telegram client
-rust/src/bin/tg-onboard   guided BotFather setup + sops encrypt + chat-id discovery
-rust/src/bin/tg-send      outbound CLI (message / document)
-rust/src/bin/tg-bot       long-polling daemon + command runner
-rust/src/bin/tg-poll      send a poll, print its id
-rust/src/bin/tg-mcp       MCP server + reply-routing daemon
-modules/nixos.nix         services.telegram-bot (hardened systemd unit)
-modules/home-manager.nix  user-service variant
-commands/{ping,status}    example drop-in commands
-gates/                    repo-local guardrails (docs-from-code)
-tests/                    hermetic e2e suites + mock Telegram API
-template/                 `nix flake init -t` scaffold for a consuming project
+flake.nix                  packages · apps · nixos/home modules · template · lib.mkSend
+justfile                   task runner — 'just' lists recipes
+rust/src/lib.rs            shared: config load, token resolution, Telegram client
+rust/src/bin/tg-send.rs    outbound CLI (message / document)
+rust/src/bin/tg-bot.rs     long-polling daemon + command runner
+rust/src/bin/tg-poll.rs    send a poll, print its id
+rust/src/bin/tg-onboard.rs guided BotFather setup + sops encrypt + chat-id discovery
+rust/src/bin/tg-mcp.rs     MCP server + reply-routing daemon
+modules/nixos.nix          services.telegram-bot (hardened systemd unit)
+modules/home-manager.nix   user-service variant (systemd on Linux, launchd on darwin)
+commands/                  example drop-in commands (2 of them)
+gates/                     repo-local guardrails (docs-from-code, doc generators)
+tests/                     hermetic e2e suites + mock Telegram API
+template/                  `nix flake init -t` scaffold for a consuming project
 ```
+<!-- /generated -->
 
 ## Security notes
+
+<!-- guardrails-ok-begin: operator-facing threat statement; deliberately hand-written and reviewed -->
 
 > **⚠️ Command mode runs commands on your host in response to Telegram messages.**
 > Anyone who controls an allow-listed chat — or who obtains your bot token — can run
@@ -443,7 +521,11 @@ template/                 `nix flake init -t` scaffold for a consuming project
   scripts, and keep `hardening = true` unless a command genuinely needs more.
 - `tg-onboard` reads the token with hidden input so it won't hit your shell history.
 
+<!-- guardrails-ok-end -->
+
 ## Privacy
+
+<!-- guardrails-ok-begin: statement of what the software does with user data -->
 
 - The bot receives whatever users send it (message text, sender/chat metadata) and
   forwards command output back through Telegram. **Message content is processed in
@@ -455,9 +537,15 @@ template/                 `nix flake init -t` scaffold for a consuming project
   people's messages you may be a data controller — keep `allowedChatIds` tight and
   enable BotFather privacy mode so the bot only sees commands addressed to it.
 
+<!-- guardrails-ok-end -->
+
 ## License & trademark
+
+<!-- guardrails-ok-begin: legal text -->
 
 MIT — see [LICENSE](LICENSE). Not affiliated with or endorsed by Telegram.
 "Telegram" is a trademark of Telegram Messenger Inc.; used here descriptively to
 identify the API this tool talks to. You, the bot operator, are responsible for
 compliance with [Telegram's Bot Terms](https://telegram.org/tos).
+
+<!-- guardrails-ok-end -->

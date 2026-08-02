@@ -313,12 +313,17 @@
         };
 
         checks = {
+          # doc: both modules are evaluated (NixOS + Home-Manager on each platform) and asserted on
           modules = checkModules;
+          # doc: `nixfmt --check` + `shfmt -d` + `rustfmt --check`
           format = checkFormat;
+          # doc: `statix` + `deadnix`
           lint = checkLint;
+          # doc: every dependency is free-licensed, with an SPDX report
           licenses = checkLicenses;
           # The hermetic suite, run against the binaries via a localhost mock
           # Telegram API. No curl/jq in the closure.
+          # doc: the daemon and CLIs against a mock Telegram API, incl. the path-traversal / glob RCE regression tests
           e2e =
             pkgs.runCommand "telegram-bot-e2e"
               {
@@ -360,6 +365,7 @@
           # encrypts must decrypt back byte-identical, and no plaintext may be
           # left on disk. Rust-only — onboarding is interactive, so the suite
           # feeds every answer on stdin.
+          # doc: `tg-onboard` driving `sops`/`age` for real — the token must decrypt back byte-identical and leave no plaintext behind
           e2e-onboard =
             pkgs.runCommand "telegram-bot-e2e-onboard"
               {
@@ -381,6 +387,7 @@
           # guardrails(local, dogfood): every Markdown surface must be generated, decorator-wrapped,
           # or whitelisted in guardrails-allow.txt — no hand-prose that silently drifts from the
           # code. Also runs the gate's own self-test (it must complain on prose, pass on wrapped).
+          # doc: Markdown must be generated, decorator-wrapped or whitelisted, and generated blocks must be current
           docs-from-code =
             pkgs.runCommand "telegram-bot-docs-from-code"
               {
@@ -389,6 +396,9 @@
                   pkgs.coreutils
                   pkgs.findutils
                   pkgs.gnused
+                  pkgs.gnugrep
+                  pkgs.gawk
+                  pkgs.diffutils
                   pkgs.git
                 ];
               }
@@ -397,6 +407,10 @@
                 cd src
                 bash gates/docs-from-code.sh
                 bash tests/test-docs-from-code.sh "$PWD/gates/docs-from-code.sh"
+                # Generated blocks must be current: regenerating must be a no-op.
+                # Without this the <!-- generated --> markers would be decoration
+                # and the content could drift exactly like hand-prose.
+                bash gates/gen-docs.sh --check
                 touch "$out"
               '';
         };

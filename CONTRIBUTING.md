@@ -2,6 +2,8 @@
 
 ## Dev environment
 
+<!-- guardrails-ok-begin: how to get a shell -->
+
 ```sh
 direnv allow         # auto-loads the dev shell on cd (needs nix-direnv) — preferred
 nix develop          # or enter it manually
@@ -11,7 +13,11 @@ The shell has the CLIs + `curl jq sops age`, the Rust toolchain (`cargo rustc cl
 cargo-audit`), the formatters/linters (`nixfmt shfmt statix deadnix`), and `gitleaks`,
 `prek`, `just`. No `devenv` needed — plain devShell + direnv is the whole setup.
 
+<!-- guardrails-ok-end -->
+
 ## Tasks — `just`
+
+<!-- guardrails-ok-begin: recipe blurbs; the recipes live in the justfile -->
 
 ```sh
 just                 # list recipes
@@ -26,7 +32,11 @@ just sizes           # closure size of the shipped artifact
 `just` recipes are thin wrappers over the flake's `nix run .#…` apps and `nix` commands
 — the apps (`onboard`/`send`/`bot`/`poll`/`mcp`) are the canonical entrypoints.
 
+<!-- guardrails-ok-end -->
+
 ## Format, lint, test — all via the flake
+
+<!-- guardrails-ok-begin: explains what the gate is for; the gate list itself is generated -->
 
 ```sh
 nix fmt              # format all *.nix (nixfmt), shell (shfmt), rust (rustfmt)
@@ -35,14 +45,22 @@ nix flake check      # the full gate (see below)
 
 `nix flake check` is the single source of truth and is exactly what CI runs. It covers:
 
-- **format** (`checks.format`) — `nixfmt --check` + `shfmt -d` + `rustfmt --check`,
-- **lint** (`checks.lint`) — `statix` + `deadnix`,
-- **licenses** (`checks.licenses`) — asserts every dependency is free-licensed, with an SPDX report,
-- **e2e** (`checks.e2e`) — the daemon/CLIs against a mock Telegram API, including the path-traversal / glob RCE regression tests,
-- **e2e-onboard** (`checks.e2e-onboard`) — `tg-onboard` driving `sops`/`age` for real: the token must decrypt back byte-identical and leave no plaintext on disk,
-- **docs-from-code** (`checks.docs-from-code`) — Markdown must be generated, decorator-wrapped or whitelisted.
+<!-- generated: bash gates/gen-checks.sh -->
+- **`modules`** — both modules are evaluated (NixOS + Home-Manager on each platform) and asserted on
+- **`format`** — `nixfmt --check` + `shfmt -d` + `rustfmt --check`
+- **`lint`** — `statix` + `deadnix`
+- **`licenses`** — every dependency is free-licensed, with an SPDX report
+- **`e2e`** — the daemon and CLIs against a mock Telegram API, incl. the path-traversal / glob RCE regression tests
+- **`e2e-mcp`**
+- **`e2e-onboard`** — `tg-onboard` driving `sops`/`age` for real — the token must decrypt back byte-identical and leave no plaintext behind
+- **`docs-from-code`** — Markdown must be generated, decorator-wrapped or whitelisted, and generated blocks must be current
+<!-- /generated -->
+
+<!-- guardrails-ok-end -->
 
 ## Security & supply-chain CI
+
+<!-- guardrails-ok-begin: narrative summary of .github/workflows -->
 
 Beyond the gate above, separate workflows run:
 
@@ -53,7 +71,11 @@ Beyond the gate above, separate workflows run:
 - **Dependabot** (`.github/dependabot.yml`) — weekly PRs for `cargo` deps and pinned
   GitHub Actions, plus auto security-update PRs; `update-flake-lock.yml` covers Nix inputs.
 
+<!-- guardrails-ok-end -->
+
 ## Distribution
+
+<!-- guardrails-ok-begin: release and consumption guidance -->
 
 - **Nix users**: CI pushes built outputs to a Cachix cache (`gerchowl`) so consumers
   auto-fetch prebuilt binaries per-OS instead of compiling. Setup (one-time): create the
@@ -63,7 +85,11 @@ Beyond the gate above, separate workflows run:
 - **Reproducibility**: each release attaches a `vendor.tar.gz` (`cargo vendor` output) so
   the Rust build stays buildable even if a crate is later yanked from crates.io.
 
+<!-- guardrails-ok-end -->
+
 ## Pre-commit hooks
+
+<!-- guardrails-ok-begin: explains .pre-commit-config.yaml -->
 
 Hooks live in `.pre-commit-config.yaml` and work with [`prek`](https://github.com/j178/prek) or `pre-commit`:
 
@@ -74,7 +100,11 @@ prek install         # or: pre-commit install
 On commit: whitespace/EOF/large-file/yaml/json checks, `gitleaks` secret scan, `nixfmt`, `shfmt`.
 On push: the full `nix flake check`.
 
+<!-- guardrails-ok-end -->
+
 ## Commit messages — Conventional Commits
+
+<!-- guardrails-ok-begin: the convention release-please depends on -->
 
 Releases are automated by [release-please](https://github.com/googleapis/release-please), which reads
 [Conventional Commits](https://www.conventionalcommits.org/) to compute the next version and the changelog:
@@ -86,6 +116,12 @@ Releases are automated by [release-please](https://github.com/googleapis/release
 
 release-please maintains a release PR; merging it tags `vX.Y.Z`, updates `CHANGELOG.md`, and cuts a GitHub release.
 
+<!-- guardrails-ok-end -->
+
 ## Security
 
+<!-- guardrails-ok-begin: pointer to SECURITY.md -->
+
 Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
+
+<!-- guardrails-ok-end -->

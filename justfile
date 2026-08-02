@@ -48,3 +48,7 @@ audit:
 # runtime closure size of the shipped artifact
 sizes:
     nix path-info -Sh .#telegram-bot-rs
+
+# regenerate the <!-- generated: … --> blocks in the docs
+gen-docs:
+    bash gates/gen-docs.sh

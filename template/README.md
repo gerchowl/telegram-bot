@@ -1,5 +1,7 @@
 # telegram-bot — project template
 
+<!-- guardrails-ok-begin: scaffold guidance; the flake it describes is template/flake.nix -->
+
 This project consumes the [`telegram-bot`](https://github.com/gerchowl/telegram-bot) flake.
 
 ## Setup (once)
@@ -21,3 +23,5 @@ tg-send "hello from $(hostname)"
 
 See `flake.nix` (`nixosConfigurations.example`) and the upstream README section
 **"Commands & rights"** for the post-only vs command-runner model.
+
+<!-- guardrails-ok-end -->
