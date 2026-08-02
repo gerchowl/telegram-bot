@@ -254,6 +254,72 @@ run_bot_until '*bold*' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_AL
 want "parse_mode applied from sentinel" '"parse_mode": "MarkdownV2"' "$MOCK_LOG"
 want "sentinel stripped from text" '"text": "*bold*"' "$MOCK_LOG"
 
+echo "== tg-bot: command replies attach media via the \\x01document=/\\x01photo= sentinel =="
+mkdir -p "$T/media"
+printf 'REPORT-BODY\n' >"$T/media/report.txt"
+printf 'PNGDATA\n' >"$T/media/shot.png"
+printf 'SECRET-OUTSIDE\n' >"$T/outside-secret.txt"
+printf '#!%s\nprintf "\\001document=%s/media/report.txt\\nhere is the report\\n"\n' "$bash_path" "$T" >"$COMMANDS/report"
+printf '#!%s\nprintf "\\001photo=%s/media/shot.png\\ncaptioned\\n"\n' "$bash_path" "$T" >"$COMMANDS/shot"
+printf '#!%s\nprintf "\\001document=%s/outside-secret.txt\\nescaped\\n"\n' "$bash_path" "$T" >"$COMMANDS/escape"
+printf '#!%s\nprintf "\\001document=%s/media/report.txt\\nnoroot\\n"\n' "$bash_path" "$T" >"$COMMANDS/noroot"
+chmod +x "$COMMANDS/report" "$COMMANDS/shot" "$COMMANDS/escape" "$COMMANDS/noroot"
+media_env="env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR=$COMMANDS TELEGRAM_MEDIA_ROOT=$T/media"
+
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/report"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'sendDocument' $media_env
+want "document uploaded" '"method": "sendDocument"' "$MOCK_LOG"
+want "remaining stdout becomes the caption" 'here is the report' "$MOCK_LOG"
+absent "sentinel line is stripped" 'document=' "$MOCK_LOG"
+
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/shot"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'sendPhoto' $media_env
+want "photo uses sendPhoto (renders inline)" '"method": "sendPhoto"' "$MOCK_LOG"
+
+# The point of the media root: a command that interpolates a user-supplied path
+# must not turn into an arbitrary-file read.
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/escape"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'attachment refused' $media_env
+want "path outside the media root is refused" 'outside TELEGRAM_MEDIA_ROOT' "$MOCK_LOG"
+absent "the outside file was NOT uploaded" '"method": "sendDocument"' "$MOCK_LOG"
+absent "its contents did not leak" 'SECRET-OUTSIDE' "$MOCK_LOG"
+want "the command's own output still gets through" 'escaped' "$MOCK_LOG"
+
+# A symlink inside the root pointing out of it must not defeat the check.
+ln -sf "$T/outside-secret.txt" "$T/media/link.txt"
+printf '#!%s\nprintf "\\001document=%s/media/link.txt\\nvia link\\n"\n' "$bash_path" "$T" >"$COMMANDS/vialink"
+chmod +x "$COMMANDS/vialink"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/vialink"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'attachment refused' $media_env
+absent "symlink out of the root did not leak" 'SECRET-OUTSIDE' "$MOCK_LOG"
+absent "symlink out of the root was not uploaded" '"method": "sendDocument"' "$MOCK_LOG"
+
+# Opt-in: with no TELEGRAM_MEDIA_ROOT the sentinel is inert.
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/noroot"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'attachment refused' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS"
+want "media is opt-in via TELEGRAM_MEDIA_ROOT" 'TELEGRAM_MEDIA_ROOT is not set' "$MOCK_LOG"
+absent "nothing uploaded when opted out" '"method": "sendDocument"' "$MOCK_LOG"
+
+# parse_mode and document sentinels compose.
+printf '#!%s\nprintf "\\001parse_mode=HTML\\n\\001document=%s/media/report.txt\\n<b>bold</b>\\n"\n' "$bash_path" "$T" >"$COMMANDS/both"
+chmod +x "$COMMANDS/both"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/both"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'sendDocument' $media_env
+want "parse_mode applies to the caption" '"parse_mode": "HTML"' "$MOCK_LOG"
+rm -f "$COMMANDS/report" "$COMMANDS/shot" "$COMMANDS/escape" "$COMMANDS/noroot" "$COMMANDS/vialink" "$COMMANDS/both"
+
 echo "== tg-bot: _poll_answer hook =="
 printf '#!%s\necho "vote $POLL_OPTIONS by $POLL_VOTER on $POLL_ID"\n' "$bash_path" >"$COMMANDS/_poll_answer"
 chmod +x "$COMMANDS/_poll_answer"

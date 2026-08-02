@@ -408,8 +408,57 @@ impl Tg {
             .context("sendPoll response had no result.poll.id")
     }
 
+    /// Upload as a document: Telegram stores it byte-exact and shows a file
+    /// attachment. The right default for anything where fidelity matters.
     pub fn send_document(
         &self,
+        chat: &str,
+        filename: &str,
+        bytes: &[u8],
+        caption: Option<&str>,
+        parse_mode: Option<&str>,
+        silent: bool,
+    ) -> Result<()> {
+        self.send_file(
+            "sendDocument",
+            "document",
+            chat,
+            filename,
+            bytes,
+            caption,
+            parse_mode,
+            silent,
+        )
+    }
+
+    /// Upload as a photo: renders inline in the chat, but Telegram re-encodes
+    /// and downscales it. Use `send_document` when the bytes must survive.
+    pub fn send_photo(
+        &self,
+        chat: &str,
+        filename: &str,
+        bytes: &[u8],
+        caption: Option<&str>,
+        parse_mode: Option<&str>,
+        silent: bool,
+    ) -> Result<()> {
+        self.send_file(
+            "sendPhoto",
+            "photo",
+            chat,
+            filename,
+            bytes,
+            caption,
+            parse_mode,
+            silent,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_file(
+        &self,
+        method: &str,
+        field: &str,
         chat: &str,
         filename: &str,
         bytes: &[u8],
@@ -444,7 +493,7 @@ impl Tg {
             .collect();
         body.extend_from_slice(
             format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{safe_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{safe_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
             )
             .as_bytes(),
         );
@@ -452,7 +501,7 @@ impl Tg {
         body.extend_from_slice(b"\r\n");
         body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
-        let url = self.url("sendDocument");
+        let url = self.url(method);
         let ct = format!("multipart/form-data; boundary={boundary}");
         let json = match self
             .agent
