@@ -249,6 +249,16 @@ services.telegram-bot = {
 };
 ```
 
+Works on **Linux and darwin** from the same config: a `systemd.user` unit on
+Linux, a `launchd` agent on darwin. The options are identical — `commands`,
+`commandsDir`, `commandRuntimeInputs`, `commandTimeout`, `postOnly`,
+`allowedChatIds`, `extraEnvironment` — so a config moves between hosts
+unchanged.
+
+`logDir` is darwin-only: launchd has no journal, so the agent's stdout/stderr
+go to `~/Library/Logs/telegram-bot{,.err}.log` unless you point it elsewhere.
+On Linux use `journalctl --user -u telegram-bot`.
+
 ---
 
 ## Downstream `mkSend` helper
