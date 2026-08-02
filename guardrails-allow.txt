@@ -1,11 +1,4 @@
 # guardrails-allow.txt — prefixes/paths exempted from the gates.
 #
-# docs-from-code BASELINE (ratchet): these docs predate the gate and are hand-prose.
-# They are whitelisted so CI is GREEN today, but this is a TODO, not a blessing — migrate
-# each to generated (<!-- generated: CMD -->…) or decorator-wrapped (<!-- guardrails-ok-begin -->…)
-# content per the docs-from-code RFC (issue #23), then DELETE its line here. The allowlist
-# should shrink to empty. New docs must NOT be added — write them generated or wrapped.
-README.md
-CONTRIBUTING.md
-SECURITY.md
-template/README.md
+# EMPTY. Every Markdown surface is now generated or explicitly wrapped at its
+# home (docs-from-code, #23/#24). Adding a line here is a regression, not a fix.
