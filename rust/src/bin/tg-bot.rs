@@ -193,10 +193,12 @@ fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Optio
         Some(d) => d,
         None => return,
     };
-    // Only commands that document themselves reach the `/` menu — Telegram
-    // requires a description per entry.
+    // The menu is a subset of what /help shows: Telegram requires a description
+    // per entry and rejects names outside [a-z0-9_]. A `/Deploy-Prod` command
+    // stays invokable and listed in /help, it just can't be in the menu.
     let cmds: Vec<serde_json::Value> = list_commands(dir)
         .into_iter()
+        .filter(|(name, _)| menu_eligible(name))
         .filter_map(|(name, desc)| {
             desc.map(|d| serde_json::json!({"command": name, "description": d}))
         })
@@ -217,13 +219,25 @@ fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Optio
     }
 }
 
-/// The commands a user can invoke, sorted, each paired with its `# desc:` line
-/// where the script has one. Single source of truth for both the `/` menu and
-/// `/help`, so the two can't disagree about what exists.
+/// Telegram only accepts 1–32 chars of `[a-z0-9_]` for a `setMyCommands` entry.
+/// `valid_cmd` is deliberately wider (it also allows uppercase and `-`), so a
+/// command can be invokable without being menu-eligible — `/help` lists those,
+/// the `/` menu can't.
+fn menu_eligible(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Every command a user can actually invoke, sorted, each paired with its
+/// `# desc:` line where the script has one. Single source of truth for both the
+/// `/` menu and `/help`, so the two can't disagree about what exists.
 ///
-/// Skips non-executables, `_`-prefixed hooks (`_poll_answer` is invoked by the
-/// daemon, not typed by a user) and anything Telegram would reject as a command
-/// name: 1–32 chars of `[a-z0-9_]`.
+/// Skips non-executables and `_`-prefixed hooks (`_poll_answer` is invoked by
+/// the daemon, never typed). The filter is `valid_cmd` — the same rule the
+/// dispatcher uses — so anything listed here is genuinely runnable.
 fn list_commands(dir: &str) -> Vec<(String, Option<String>)> {
     let rd = match std::fs::read_dir(dir) {
         Ok(r) => r,
@@ -241,13 +255,7 @@ fn list_commands(dir: &str) -> Vec<(String, Option<String>)> {
             Ok(n) => n,
             Err(_) => continue,
         };
-        if name.starts_with('_')
-            || name.is_empty()
-            || name.len() > 32
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        {
+        if name.starts_with('_') || !valid_cmd(&name) {
             continue;
         }
         let desc = read_desc(&path);
