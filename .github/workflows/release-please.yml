@@ -14,7 +14,7 @@ jobs:
     steps:
       # Maintains a release PR (version bump + CHANGELOG) from Conventional
       # Commits; merging it tags vX.Y.Z and cuts a GitHub release.
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -24,9 +24,9 @@ jobs:
       # When a release is cut, archive the exact Rust dependency sources
       # (cargo vendor) and attach them — so the build stays reproducible
       # long-term even if a crate is later yanked/removed from crates.io.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ steps.release.outputs.release_created }}
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         if: ${{ steps.release.outputs.release_created }}
         with:
           extra_nix_config: experimental-features = nix-command flakes
