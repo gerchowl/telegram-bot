@@ -158,6 +158,44 @@ TELEGRAM_COMMANDS_DIR="$PWD/commands" \
 
 Then message `/deploy` from your chat. (See `commands/ping` and `commands/status`.)
 
+### Sentinels: formatting and attachments
+
+A command can control how its reply is sent by emitting `\x01key=value` lines at
+the **very start** of stdout. They are stripped before sending, and only a
+contiguous run at the start counts — so nothing later in the output can inject one.
+
+| sentinel | effect |
+|----------|--------|
+| `\x01parse_mode=MarkdownV2` \| `HTML` | render the reply (or caption) as formatted text |
+| `\x01document=PATH` | upload `PATH` as a file attachment; remaining stdout becomes the caption |
+| `\x01photo=PATH` | same, but rendered inline as an image (Telegram re-encodes it) |
+
+```sh
+cat > commands/report <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+generate-report > /var/lib/telegram-bot/media/report.pdf
+printf '\001document=/var/lib/telegram-bot/media/report.pdf\n'
+echo "nightly report ✅"
+EOF
+```
+
+**Attachments are opt-in.** They do nothing unless `TELEGRAM_MEDIA_ROOT` is set,
+and the path must resolve (after following symlinks) inside that root — otherwise
+the upload is refused, the reason is appended to the reply, and the command's own
+output is still delivered.
+
+That root is not a defence against a *hostile* command — one already runs
+arbitrary code as the bot user and could simply `cat` a file to stdout. It bounds
+a **buggy** one: a script that interpolates a Telegram-supplied argument into a
+path would otherwise turn `/report ../../etc/shadow` into an arbitrary-file read.
+Keep the root a directory the bot owns and writes into.
+
+Files over Telegram's 50 MB bot-upload cap are refused, as are non-regular files
+(a FIFO would otherwise block the daemon on `open`). If a key repeats, the first
+occurrence wins. Use `document` unless you specifically want inline rendering —
+`photo` re-encodes and downscales.
+
 ### The `/` menu and `/help` (auto-registered)
 
 Give a command a `# desc:` line and `tg-bot` registers the Telegram **`/` autocomplete

@@ -35,9 +35,20 @@ class H(BaseHTTPRequestHandler):
     def _form(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n).decode("utf-8", "replace") if n else ""
-        # multipart (sendDocument) — just grab a marker; we only assert it was called
+        # multipart (sendDocument / sendPhoto). The text fields are written
+        # before the file part, so pull them out of the head of the body —
+        # tests need to assert on caption and parse_mode, not just that an
+        # upload happened. The file bytes themselves are never logged.
         if "multipart/form-data" in self.headers.get("Content-Type", ""):
-            return {"_multipart": [raw[:200]]}
+            out = {"_multipart": [raw[:200]]}
+            for name in ("chat_id", "caption", "parse_mode"):
+                marker = 'name="%s"\r\n\r\n' % name
+                i = raw.find(marker)
+                if i == -1:
+                    continue
+                j = raw.find("\r\n", i + len(marker))
+                out[name] = [raw[i + len(marker):j if j != -1 else None]]
+            return out
         return parse_qs(raw)
 
     def handle_method(self, method, params):
@@ -52,12 +63,13 @@ class H(BaseHTTPRequestHandler):
             if not ups:
                 time.sleep(0.3)  # cheap fake long-poll
             return {"ok": True, "result": ups}
-        if method in ("sendMessage", "sendDocument"):
+        if method in ("sendMessage", "sendDocument", "sendPhoto"):
             if os.path.exists(os.environ.get("MOCK_FAIL_FILE", "")):
                 return {"ok": False, "description": "Bad Request: simulated failure"}
             entry = {"method": method,
                      "chat_id": (params.get("chat_id") or [""])[0],
                      "text": (params.get("text") or [""])[0],
+                     "caption": (params.get("caption") or [""])[0],
                      "parse_mode": (params.get("parse_mode") or [""])[0],
                      "multipart": "_multipart" in params}
             logline(entry)

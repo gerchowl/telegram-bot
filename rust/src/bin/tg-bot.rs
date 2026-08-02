@@ -17,6 +17,14 @@ use wait_timeout::ChildExt;
 
 const TG_LIMIT: usize = 3900; // headroom under Telegram's 4096-char cap
 
+// Telegram's caption cap is 1024, counted in UTF-16 code units while we count
+// Unicode scalars — an emoji-heavy caption counts double there. Same headroom
+// approach as TG_LIMIT, so we split to a follow-up message before Telegram
+// rejects the upload outright.
+const CAPTION_LIMIT: usize = 900;
+
+const MAX_UPLOAD: u64 = 50_000_000; // Telegram's bot-API upload cap
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("tg-bot: {}", redact(&format!("{e:#}")));
@@ -338,21 +346,148 @@ fn run_command(
     } else {
         out
     };
-    // A command may opt into a Telegram parse mode by emitting a sentinel first line
-    // `\x01parse_mode=MarkdownV2` (stripped before sending).
-    let mut parse_mode: Option<String> = None;
-    if let Some(rest) = msg.strip_prefix("\u{1}parse_mode=") {
-        let (mode, after) = match rest.split_once('\n') {
-            Some((m, a)) => (m.to_string(), a.to_string()),
-            None => (rest.to_string(), String::new()),
-        };
-        parse_mode = Some(mode);
-        msg = after;
+    let sentinels = take_sentinels(&mut msg);
+    let parse_mode = sentinels
+        .iter()
+        .find(|(k, _)| k == "parse_mode")
+        .map(|(_, v)| v.clone());
+
+    // `\x01document=` / `\x01photo=` attach a file. Opt-in and confined to
+    // TELEGRAM_MEDIA_ROOT — see resolve_media.
+    let media = sentinels
+        .iter()
+        .find(|(k, _)| k == "document" || k == "photo");
+    if let Some((kind, path)) = media {
+        match resolve_media(path) {
+            Ok((bytes, name)) => {
+                // Telegram caps captions well below the message limit; longer
+                // output would be rejected outright, so send it separately.
+                let short = msg.chars().count() <= CAPTION_LIMIT;
+                let (caption, leftover) = if short {
+                    (msg.as_str(), "")
+                } else {
+                    ("", msg.as_str())
+                };
+                let cap = if caption.is_empty() {
+                    None
+                } else {
+                    Some(caption)
+                };
+                let res = if kind == "photo" {
+                    tg.send_photo(chat, &name, &bytes, cap, parse_mode.as_deref(), false)
+                } else {
+                    tg.send_document(chat, &name, &bytes, cap, parse_mode.as_deref(), false)
+                };
+                let leftover = leftover.to_string();
+                match res {
+                    Ok(()) => {
+                        if !leftover.is_empty() {
+                            send_text(tg, chat, leftover, parse_mode.as_deref());
+                        }
+                        return;
+                    }
+                    // Fall through to the text reply rather than swallowing the
+                    // command's output because the upload failed.
+                    Err(e) => eprintln!(
+                        "tg-bot: /{cmd} {kind} upload failed: {}",
+                        redact(&format!("{e:#}"))
+                    ),
+                }
+            }
+            Err(why) => {
+                eprintln!("tg-bot: /{cmd} {kind} refused: {why}");
+                if msg.is_empty() {
+                    msg = format!("(/{cmd} attachment refused: {why})");
+                } else {
+                    msg.push_str(&format!("\n\n(attachment refused: {why})"));
+                }
+            }
+        }
     }
+    send_text(tg, chat, msg, parse_mode.as_deref());
+}
+
+fn send_text(tg: &Tg, chat: &str, mut msg: String, parse_mode: Option<&str>) {
     if msg.chars().count() > TG_LIMIT {
         msg = msg.chars().take(TG_LIMIT).collect();
     }
-    let _ = tg.send_message(chat, &msg, parse_mode.as_deref(), false);
+    let _ = tg.send_message(chat, &msg, parse_mode, false);
+}
+
+/// Strip leading `\x01key=value` sentinel lines from a command's output and
+/// return them. Only a contiguous run at the very start counts, so a sentinel
+/// can never be injected by data appearing later in the output.
+fn take_sentinels(msg: &mut String) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    while let Some(rest) = msg.strip_prefix('\u{1}') {
+        let (line, after) = match rest.split_once('\n') {
+            // Tolerate CRLF: a command emitting \r\n would otherwise leave the
+            // \r inside the value, so a path silently becomes "no such file".
+            Some((l, a)) => (l.trim_end_matches('\r').to_string(), a.to_string()),
+            None => (rest.trim_end_matches('\r').to_string(), String::new()),
+        };
+        let (k, v) = match line.split_once('=') {
+            Some((k, v)) => (k.to_string(), v.to_string()),
+            None => break, // not a sentinel; leave the text alone
+        };
+        found.push((k, v));
+        *msg = after;
+    }
+    found
+}
+
+/// Read a file a command asked to attach.
+///
+/// Disabled unless `TELEGRAM_MEDIA_ROOT` is set, and the path must resolve
+/// inside it. A command already runs arbitrary code as the bot user, so this
+/// is not a trust boundary against a hostile command — it bounds the blast
+/// radius of a BUGGY one, e.g. a script that interpolates a Telegram-supplied
+/// argument into a path and turns `/report ../../etc/shadow` into an
+/// arbitrary-file read. Resolution is via canonicalize, so symlinks out of the
+/// root are rejected too.
+fn resolve_media(path: &str) -> Result<(Vec<u8>, String), String> {
+    let root = match std::env::var("TELEGRAM_MEDIA_ROOT") {
+        Ok(r) if !r.is_empty() => r,
+        _ => return Err("TELEGRAM_MEDIA_ROOT is not set".into()),
+    };
+    let root =
+        std::fs::canonicalize(&root).map_err(|_| format!("media root '{root}' does not exist"))?;
+    let real = std::fs::canonicalize(path).map_err(|_| "no such file".to_string())?;
+    if !real.starts_with(&root) {
+        return Err("path is outside TELEGRAM_MEDIA_ROOT".into());
+    }
+    // Reject a non-regular file (FIFO, device) BEFORE opening it — opening a
+    // FIFO for reading blocks until a writer appears, which would wedge the
+    // daemon. symlink_metadata doesn't re-resolve, so this describes exactly
+    // the leaf canonicalize landed on.
+    let pre = std::fs::symlink_metadata(&real).map_err(|_| "cannot stat file".to_string())?;
+    if !pre.is_file() {
+        return Err("not a regular file".into());
+    }
+    // Size and type are then checked against the OPEN handle, not the path, so
+    // a swap between the check and the read can't redirect us.
+    let f = std::fs::File::open(&real).map_err(|_| "cannot read file".to_string())?;
+    let meta = f.metadata().map_err(|_| "cannot stat file".to_string())?;
+    if !meta.is_file() {
+        return Err("not a regular file".into());
+    }
+    if meta.len() > MAX_UPLOAD {
+        return Err(format!(
+            "file is {} MB, over Telegram's {} MB bot limit",
+            meta.len() / 1_000_000,
+            MAX_UPLOAD / 1_000_000
+        ));
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    let mut capped = std::io::Read::take(f, MAX_UPLOAD);
+    std::io::Read::read_to_end(&mut capped, &mut bytes)
+        .map_err(|_| "cannot read file".to_string())?;
+    let name = real
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file")
+        .to_string();
+    Ok((bytes, name))
 }
 
 /// Run `path` with `argv` + `envs`, capturing combined stdout+stderr under a timeout.
