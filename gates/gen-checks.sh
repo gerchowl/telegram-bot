@@ -9,7 +9,7 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
-awk '
+out="$(awk '
   /^        checks = \{/ { inchecks = 1; next }
   inchecks && /^        \};/ { inchecks = 0 }
   !inchecks { next }
@@ -20,4 +20,14 @@ awk '
     if (doc != "") { printf "- **`%s`** — %s\n", name, doc; doc = "" }
     else { printf "- **`%s`**\n", name }
   }
-' flake.nix
+' flake.nix)"
+
+# An empty list would mean the attrset shape changed and the parse silently
+# stopped matching — that must fail, not render a doc claiming no gates exist.
+declared="$(awk '/^        checks = \{/{i=1;next} i&&/^        \};/{i=0} i&&/^          [a-z][a-z0-9-]* =/{n++} END{print n+0}' flake.nix)"
+parsed="$(printf '%s\n' "$out" | grep -c '^- ')"
+if [ "$parsed" -eq 0 ] || [ "$parsed" -ne "$declared" ]; then
+  echo "gen-checks: parsed $parsed of $declared checks — the attrset shape changed" >&2
+  exit 2
+fi
+printf '%s\n' "$out"

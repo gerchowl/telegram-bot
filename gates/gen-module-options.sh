@@ -56,6 +56,20 @@ opts_of() { # $1 = file
 # mkEnableOption / mkPackageOption declare options too, but with a different
 # shape; name them explicitly so the table is complete.
 emit() { # $1 = file, $2 = label
+  # Fail loudly rather than emitting an empty table. If a nixfmt reflow or a new
+  # way of declaring options breaks the parse, the generated doc must not
+  # quietly become "this module has two options" while the gate stays green.
+  local declared parsed
+  # Deliberately LOOSER than the parser: it must notice shapes the parser
+  # cannot handle (lib.mkOption, a missing description) rather than agreeing
+  # with it by construction.
+  declared="$(grep -cE '^    [a-zA-Z][a-zA-Z0-9]* = (lib\.)?mkOption' "$1")"
+  parsed="$(opts_of "$1" | wc -l | tr -d ' ')"
+  if [ "$parsed" -ne "$declared" ]; then
+    echo "gen-module-options: parsed $parsed of $declared mkOption blocks in $1 —" \
+      "the declaration shape changed; fix the parser rather than shipping a partial table" >&2
+    exit 2
+  fi
   echo "**\`$2\`**"
   echo
   echo '| option | default | description |'
