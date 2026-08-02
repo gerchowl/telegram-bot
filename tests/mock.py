@@ -62,6 +62,16 @@ class H(BaseHTTPRequestHandler):
                      "multipart": "_multipart" in params}
             logline(entry)
             return {"ok": True, "result": {"message_id": 1}}
+        if method == "sendPoll":
+            logline({"method": "sendPoll",
+                     "chat_id": (params.get("chat_id") or [""])[0],
+                     "question": (params.get("question") or [""])[0],
+                     "options": (params.get("options") or [""])[0],
+                     "is_anonymous": (params.get("is_anonymous") or [""])[0],
+                     "allows_multiple_answers":
+                         (params.get("allows_multiple_answers") or [""])[0]})
+            return {"ok": True, "result": {"message_id": 1,
+                                           "poll": {"id": "mockpoll123"}}}
         if method == "setMyCommands":
             logline({"method": "setMyCommands",
                      "commands": (params.get("commands") or [""])[0]})

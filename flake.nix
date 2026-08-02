@@ -264,6 +264,7 @@
                 nativeBuildInputs = [
                   tg-send
                   tg-bot
+                  tg-poll
                   pkgs.python3
                   pkgs.curl
                   pkgs.jq

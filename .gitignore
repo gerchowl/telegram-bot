@@ -2,6 +2,9 @@
 result
 result-*
 
+# cargo build artifacts (`just cargo build` / `just audit` outside the nix build)
+rust/target/
+
 # local runtime / accidental plaintext (the *encrypted* secrets/*.yaml IS committed)
 *.plain
 /secrets/*.plaintext

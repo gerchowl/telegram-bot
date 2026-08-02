@@ -364,6 +364,39 @@ impl Tg {
         Ok(())
     }
 
+    /// Send a poll and return its id (`result.poll.id`), so a project can map
+    /// incoming `poll_answer` updates back to what was asked. Non-anonymous by
+    /// default — Telegram only reports a voter for non-anonymous polls.
+    pub fn send_poll(
+        &self,
+        chat: &str,
+        question: &str,
+        options: &[String],
+        anonymous: bool,
+        multi: bool,
+    ) -> Result<String> {
+        // Telegram wants `options` as a JSON array of strings; serde does the
+        // quoting/escaping the bash version delegated to `jq -R . | jq -cs .`.
+        let options_json = serde_json::to_string(options).context("encoding poll options")?;
+        let json = self.post_form(
+            "sendPoll",
+            &[
+                ("chat_id", chat),
+                ("question", question),
+                ("options", options_json.as_str()),
+                ("is_anonymous", if anonymous { "true" } else { "false" }),
+                (
+                    "allows_multiple_answers",
+                    if multi { "true" } else { "false" },
+                ),
+            ],
+        )?;
+        json.pointer("/result/poll/id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .context("sendPoll response had no result.poll.id")
+    }
+
     pub fn send_document(
         &self,
         chat: &str,
