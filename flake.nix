@@ -149,6 +149,11 @@
         # (#37). Evaluate both modules and assert on what consumers depend on.
         # The Home-Manager module is evaluated for BOTH platforms regardless of
         # the host, so the darwin launchd branch is covered from Linux CI too.
+        #
+        # Scope: this asserts on the config the modules PRODUCE. Home-Manager
+        # rewrites ProgramArguments (wrapping it in wait4path) before writing
+        # the plist, so a regression inside Home-Manager's own wrapping is out
+        # of range — as is whether launchd actually accepts the job.
         checkModules =
           let
             common = {
@@ -221,6 +226,9 @@
               hmDarwinCommands = asStr darwinAgent.EnvironmentVariables.TELEGRAM_COMMANDS_DIR;
               hmDarwinOut = asStr darwinAgent.StandardOutPath;
               hmDarwinKeepAlive = lib.boolToString darwinAgent.KeepAlive.SuccessfulExit;
+              hmDarwinRunAtLoad = lib.boolToString darwinAgent.RunAtLoad;
+              hmDarwinThrottle = toString darwinAgent.ThrottleInterval;
+              hmDarwinToken = asStr darwinAgent.EnvironmentVariables.TELEGRAM_BOT_TOKEN_FILE;
               hmDarwinHasUnit = lib.boolToString (hmDarwin.systemd.user.services ? telegram-bot);
             }
             ''
@@ -255,6 +263,9 @@
               chk "commands attrset reaches the agent" "telegram-bot-commands" "$hmDarwinCommands"
               chk "stdout is captured to a log" "/telegram-bot.log" "$hmDarwinOut"
               eq "restarts only on failure" "false" "$hmDarwinKeepAlive"
+              eq "starts at load" "true" "$hmDarwinRunAtLoad"
+              eq "respawn is throttled" "5" "$hmDarwinThrottle"
+              eq "tokenFile reaches the agent" "/run/secrets/tg" "$hmDarwinToken"
               eq "no systemd unit on darwin" "false" "$hmDarwinHasUnit"
 
               [ "$fail" -eq 0 ] || { echo "module checks FAILED"; exit 1; }

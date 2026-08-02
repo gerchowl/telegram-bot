@@ -163,6 +163,16 @@ in
       };
     };
 
+    # launchd refuses to start a job whose StandardOutPath is in a directory
+    # that doesn't exist, and says so only in the system log. The default
+    # (~/Library/Logs) is always present on macOS, but a custom logDir need not
+    # be — create it rather than fail opaquely.
+    home.activation = mkIf isDarwin {
+      telegramBotLogDir = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        run mkdir -p ${lib.escapeShellArg logDir}
+      '';
+    };
+
     launchd.agents = mkIf isDarwin {
       telegram-bot = {
         enable = true;
