@@ -27,6 +27,8 @@ still be in any language.
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## Quick start
 
 <!-- guardrails-ok-begin: onboarding narrative; the commands are in fenced blocks -->
@@ -545,7 +547,5 @@ MIT — see [LICENSE](LICENSE). Not affiliated with or endorsed by Telegram.
 "Telegram" is a trademark of Telegram Messenger Inc.; used here descriptively to
 identify the API this tool talks to. You, the bot operator, are responsible for
 compliance with [Telegram's Bot Terms](https://telegram.org/tos).
-
-<!-- guardrails-ok-end -->
 
 <!-- guardrails-ok-end -->
