@@ -308,12 +308,24 @@ fn route_update(upd: &Value, r: &Router) {
     }
 }
 
+/// Largest IPC request the daemon will buffer. A 50 MB file is ~67 MB of
+/// base64 plus JSON overhead, so this leaves headroom while staying bounded.
+const MAX_IPC: u64 = 80_000_000;
+
 /// One IPC request per connection: a single JSON object line in, one out.
 fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
     let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    // Bound the read. read_line grows until a newline or EOF, and the TCP
+    // listener is unauthenticated — any tailnet peer could otherwise stream
+    // newline-free bytes until the daemon is OOM-killed. Pre-existing, but
+    // send_file's base64 payloads make bulk traffic the expected shape here.
+    let mut reader = BufReader::new(Read::take(stream, MAX_IPC));
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    let n = reader.read_line(&mut line)?;
+    if n as u64 >= MAX_IPC && !line.ends_with('\n') {
+        let _ = writeln!(writer, "{}", json!({"error": "request too large"}));
+        bail!("ipc request exceeded {MAX_IPC} bytes");
+    }
     let req: Value = serde_json::from_str(line.trim()).context("parsing ipc request")?;
     let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -687,7 +699,15 @@ fn read_for_upload(path: &str) -> Result<(Vec<u8>, String)> {
             }
         }
     }
-    let meta = std::fs::metadata(&real).context("stat")?;
+    // Reject a non-regular file before opening: opening a FIFO blocks until a
+    // writer appears, which would hang the agent's tool call.
+    if !std::fs::symlink_metadata(&real).context("stat")?.is_file() {
+        bail!("not a regular file");
+    }
+    // Then check size against the OPEN handle, so a swap between the check and
+    // the read can't slip a different (larger) file through.
+    let f = std::fs::File::open(&real).context("open")?;
+    let meta = f.metadata().context("stat")?;
     if !meta.is_file() {
         bail!("not a regular file");
     }
@@ -698,7 +718,10 @@ fn read_for_upload(path: &str) -> Result<(Vec<u8>, String)> {
             MAX_UPLOAD / 1_000_000
         );
     }
-    let bytes = std::fs::read(&real).context("read")?;
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    Read::take(f, MAX_UPLOAD)
+        .read_to_end(&mut bytes)
+        .context("read")?;
     let name = real
         .file_name()
         .and_then(|s| s.to_str())
@@ -727,7 +750,7 @@ fn tools_spec() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the file to send. Read on the machine running this tool."},
+                    "path": {"type": "string", "description": "Absolute path to the file to send. Read on the machine running this tool, so it must be local to the agent. Max 50 MB. If TG_MCP_MEDIA_ROOT is set the path must resolve inside it, otherwise the call is refused."},
                     "caption": {"type": "string", "description": "One-line description of what the file is. Shown with the file."},
                     "inline": {"type": "boolean", "description": "Render as a photo instead of a file attachment. Only for images, and only when a quick look matters more than fidelity — Telegram re-encodes and downscales. Default false, which preserves the bytes exactly.", "default": false},
                     "silent": {"type": "boolean", "description": "Send without a notification sound.", "default": false}

@@ -117,6 +117,31 @@ want "missing file says so" 'no such file' "$T/miss.json"
 rpc '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"send_file","arguments":{}}}' >"$T/nopath.json"
 want "missing path is an error" 'path is required' "$T/nopath.json"
 
+echo "== tg-mcp: the daemon bounds an oversized IPC request =="
+# The TCP listener is unauthenticated, so an unbounded read_line would let any
+# reachable peer stream newline-free bytes until the daemon is OOM-killed.
+# Push >80MB with no newline straight at the socket and require the daemon to
+# refuse it and stay up.
+python3 - "$TG_MCP_SOCK" <<'PY' >"$T/flood.out" 2>&1 || true
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(30)
+s.connect(sys.argv[1])
+chunk = b"A" * (1 << 20)
+sent = 0
+try:
+    while sent < 90 * (1 << 20):
+        s.send(chunk)
+        sent += len(chunk)
+except Exception as e:
+    print("send stopped:", type(e).__name__)
+print("sent", sent)
+PY
+# The daemon must still answer afterwards — that is the real assertion.
+: >"$MOCK_LOG"
+rpc "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"send_file\",\"arguments\":{\"path\":\"$T/media/run.log\"}}}" >/dev/null
+want "daemon survives an oversized request" '"method": "sendDocument"' "$MOCK_LOG"
+
 echo "== tg-mcp: with no root set, any readable path is allowed =="
 : >"$MOCK_LOG"
 unset TG_MCP_MEDIA_ROOT
