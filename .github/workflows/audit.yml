@@ -36,7 +36,7 @@ jobs:
           extra_nix_config: experimental-features = nix-command flakes
       - name: scan runtime closures for CVEs
         run: |
-          paths=$(nix build .#telegram-bot-rs .#telegram-bot .#tg-bot --no-link --print-out-paths)
+          paths=$(nix build .#telegram-bot-rs --no-link --print-out-paths)
           # shellcheck disable=SC2086
           nix shell nixpkgs#vulnix --command vulnix $paths || true
 

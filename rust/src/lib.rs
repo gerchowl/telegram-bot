@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Lars Gerchow
 //! Shared core for the `tg-send` and `tg-bot` binaries: config loading, bot
 //! token resolution, and a minimal Telegram Bot API client. Kept dependency
-//! -light on purpose — this is the v2 replacement for the bash scripts.
+//! -light on purpose — small binaries with a minimal runtime closure.
 
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -67,8 +67,8 @@ mod tests {
     }
 }
 
-/// Non-secret config (chat id, sops file path, …). Mirrors the bash
-/// `config.env`, including its `export K="${K:-default}"` convention where an
+/// Non-secret config (chat id, sops file path, …) as written by tg-onboard.
+/// Reads `config.env`, including its `export K="${K:-default}"` convention where an
 /// explicit environment variable always wins over the file's default.
 pub struct Config {
     defaults: HashMap<String, String>,
@@ -135,7 +135,7 @@ fn parse_config_line(line: &str) -> Option<(String, String)> {
 }
 
 /// Resolve the bot token: `$TELEGRAM_BOT_TOKEN` > token file > sops file
-/// (decrypted by shelling out to `sops`, matching the bash behaviour).
+/// (decrypted by shelling out to `sops`).
 pub fn resolve_token(cfg: &Config) -> Result<String> {
     if let Some(t) = cfg.get("TELEGRAM_BOT_TOKEN") {
         return Ok(t);
@@ -153,9 +153,20 @@ pub fn resolve_token(cfg: &Config) -> Result<String> {
             .args(["-d", "--extract", &format!("[\"{key}\"]"), &sf])
             .output()
             .context("running sops to decrypt the token")?;
-        if out.status.success() {
-            return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        // Both failure modes below are diagnosed rather than falling through to
+        // the generic "no token" message: a silent empty token 404s on every
+        // later API call, which is expensive to trace back to a bad sops key.
+        if !out.status.success() {
+            bail!(
+                "sops failed to decrypt '{sf}' (key '{key}'). Is your age identity reachable? \
+                 Set SOPS_AGE_KEY_FILE (e.g. ~/.config/sops/age/keys.txt)."
+            );
         }
+        let tok = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if tok.is_empty() {
+            bail!("decrypted token is empty (key '{key}' in '{sf}').");
+        }
+        return Ok(tok);
     }
     bail!("no bot token found. Set TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_TOKEN_FILE or TELEGRAM_BOT_SOPS_FILE (run 'tg-onboard' to set up).");
 }
@@ -376,7 +387,7 @@ impl Tg {
         multi: bool,
     ) -> Result<String> {
         // Telegram wants `options` as a JSON array of strings; serde does the
-        // quoting/escaping the bash version delegated to `jq -R . | jq -cs .`.
+        // quoting/escaping correctly for arbitrary option text.
         let options_json = serde_json::to_string(options).context("encoding poll options")?;
         let json = self.post_form(
             "sendPoll",

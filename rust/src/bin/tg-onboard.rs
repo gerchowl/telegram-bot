@@ -13,7 +13,7 @@
 
 use std::fs;
 use std::io::{IsTerminal, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command, Stdio};
 use telegram_bot::Tg;
@@ -29,8 +29,10 @@ fn dim(s: &str) {
 fn ok(s: &str) {
     println!("\x1b[32m✓\x1b[0m {s}");
 }
+/// Warnings carry formatted errors, so they go through redact for the same
+/// reason the die paths do — a Telegram API error can embed the token URL.
 fn warn(s: &str) {
-    println!("\x1b[33m!\x1b[0m {s}");
+    println!("\x1b[33m!\x1b[0m {}", telegram_bot::redact(s));
 }
 fn rule() {
     dim("────────────────────────────────────────────────────────");
@@ -278,7 +280,15 @@ fn gen_age_key() -> PathBuf {
         Ok(s) if s.success() => {}
         _ => die("age-keygen failed"),
     }
-    let _ = fs::set_permissions(&loc, fs::Permissions::from_mode(0o600));
+    // age-keygen already creates with O_EXCL|0600, but this is a private key
+    // that decrypts the token — don't rely on that implicitly, and don't
+    // continue if the permissions can't be confirmed.
+    if fs::set_permissions(&loc, fs::Permissions::from_mode(0o600)).is_err() {
+        die(&format!(
+            "could not restrict permissions on {} — refusing to leave a private key readable",
+            loc.display()
+        ));
+    }
     ok(&format!("created age key: {}", loc.display()));
 
     // Gitignore repo-local keys (relative path, or under $PWD).
@@ -379,8 +389,23 @@ fn step_sops(token: &str) {
     if fs::create_dir_all("secrets").is_err() {
         die("could not create secrets/");
     }
+    // The token is plaintext on disk between this write and the sops call, so
+    // narrow that window: drop any existing entry first (a pre-planted symlink
+    // would otherwise redirect the write, and the cleanup below would unlink
+    // only the link, stranding the plaintext at the target), then create the
+    // file exclusively at 0600 rather than inheriting the umask.
+    let secret = Path::new("secrets/telegram.yaml");
+    if secret.symlink_metadata().is_ok() && fs::remove_file(secret).is_err() {
+        die("could not replace secrets/telegram.yaml");
+    }
     let plain = format!("telegram_bot_token: {token}\n");
-    if fs::write("secrets/telegram.yaml", plain).is_err() {
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(secret)
+        .and_then(|mut f| f.write_all(plain.as_bytes()));
+    if written.is_err() {
         die("could not write secrets/telegram.yaml");
     }
     let status = Command::new("sops")

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Lars Gerchow
 //! tg-poll — send a Telegram poll and print its poll id, so a project can map
-//! incoming poll_answer updates back to what was asked. Drop-in compatible with
-//! the bash tg-poll: same flags, env contract and token/chat resolution.
+//! incoming poll_answer updates back to what was asked. Token/chat resolution
+//! and the config contract match tg-send.
 
 use std::process::exit;
 use telegram_bot::{resolve_token, Config, Tg};

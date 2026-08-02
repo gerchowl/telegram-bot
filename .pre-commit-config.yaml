@@ -28,9 +28,9 @@ repos:
         name: shfmt
         entry: shfmt -w -i 2 -ci
         language: system
-        files: ^(scripts/.*\.sh|tests/.*\.sh|commands/(ping|status))$
+        files: ^(tests/.*\.sh|gates/.*\.sh|commands/(ping|status))$
       - id: flake-check
-        name: nix flake check (fmt · lint · licenses · shellcheck · e2e)
+        name: nix flake check (fmt · lint · licenses · e2e · docs-from-code)
         entry: nix flake check
         language: system
         pass_filenames: false

@@ -126,6 +126,68 @@ want "refuses to overwrite" 'refusing to overwrite' "$T/run3.out"
 want "existing file untouched" 'not-a-key' "$T/proj3/keys.txt"
 absent "no secrets written after the refusal" 'ENC[' "$T/run3.out"
 
+echo "== tg-onboard: a pre-planted symlink cannot redirect the plaintext token =="
+# secrets/telegram.yaml is plaintext for the moment between write and `sops
+# --encrypt --in-place`. If it were a symlink, the token would land at the
+# target and the failure-path cleanup would unlink only the link.
+start_mock "$UPDATES"
+mkdir -p "$T/proj4/secrets"
+printf 'untouched\n' >"$T/decoy"
+ln -s "$T/decoy" "$T/proj4/secrets/telegram.yaml"
+printf '\n%s\n1\n' "$TOKEN" | env SOPS_AGE_KEY_FILE="$T/agehome/keys.txt" \
+  tg-onboard --dir "$T/proj4" >"$T/run4.out" 2>&1
+absent "symlink target did not receive the token" "$TOKEN" "$T/decoy"
+want "decoy left intact" 'untouched' "$T/decoy"
+if [ -L "$T/proj4/secrets/telegram.yaml" ]; then
+  no "secrets/telegram.yaml is still a symlink"
+else
+  ok "symlink replaced by a regular file"
+fi
+want "token encrypted into the real file" 'ENC[AES256_GCM' "$T/proj4/secrets/telegram.yaml"
+
+echo "== tg-onboard: a failing sops leaves no plaintext token behind =="
+# The cleanup branch: plaintext is written, sops then fails, and the file must
+# be removed. Driven by a pre-existing .sops.yaml whose rule does not match
+# secrets/*.yaml, which tg-onboard leaves untouched -> "no matching creation
+# rules found".
+start_mock "$UPDATES"
+mkdir -p "$T/proj5"
+cat >"$T/proj5/.sops.yaml" <<'YAML'
+creation_rules:
+  - path_regex: nothing-matches-this/[^/]+\.yaml$
+    age: age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+YAML
+printf '\n%s\n1\n' "$TOKEN" | env SOPS_AGE_KEY_FILE="$T/agehome/keys.txt" \
+  tg-onboard --dir "$T/proj5" >"$T/run5.out" 2>&1
+if [ "$?" -ne 0 ]; then ok "aborts nonzero when sops fails"; else no "should exit nonzero when sops fails"; fi
+want "reports the encryption failure" 'sops encryption failed' "$T/run5.out"
+if [ -e "$T/proj5/secrets/telegram.yaml" ]; then
+  no "plaintext secrets/telegram.yaml was left behind"
+else
+  ok "plaintext secrets file removed"
+fi
+if grep -rqF "$TOKEN" "$T/proj5" 2>/dev/null; then
+  no "token found on disk after the failure"
+  grep -rlF "$TOKEN" "$T/proj5"
+else
+  ok "no token anywhere under the project after the failure"
+fi
+absent "token not echoed in the error output" "$TOKEN" "$T/run5.out"
+
+echo "== token resolution: sops failures are diagnosed, not silently empty =="
+# Both controls existed in the deleted scripts/lib.sh. With Rust the only
+# implementation they have to live here, or a misconfigured key just 404s.
+env TELEGRAM_CHAT_ID=42 TELEGRAM_BOT_SOPS_FILE="$T/proj1/secrets/telegram.yaml" \
+  TELEGRAM_BOT_SOPS_KEY=no_such_key SOPS_AGE_KEY_FILE="$T/agehome/keys.txt" \
+  tg-send "x" >"$T/badkey.out" 2>&1
+if [ "$?" -ne 0 ]; then ok "wrong sops key exits nonzero"; else no "wrong sops key should exit nonzero"; fi
+want "wrong sops key is diagnosed" 'sops failed to decrypt' "$T/badkey.out"
+absent "no token in the error" "$TOKEN" "$T/badkey.out"
+# No reachable age identity => sops cannot decrypt at all.
+env TELEGRAM_CHAT_ID=42 TELEGRAM_BOT_SOPS_FILE="$T/proj1/secrets/telegram.yaml" \
+  SOPS_AGE_KEY_FILE=/nonexistent tg-send "x" >"$T/nokey.out" 2>&1
+want "unreachable identity mentions SOPS_AGE_KEY_FILE" 'SOPS_AGE_KEY_FILE' "$T/nokey.out"
+
 echo
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

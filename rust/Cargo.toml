@@ -5,7 +5,7 @@ name = "telegram-bot"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Lightweight Telegram bot: tg-send + tg-bot, compiled (v2 of the bash implementation)"
+description = "Lightweight Telegram bot: tg-send, tg-bot, tg-poll, tg-onboard and an MCP bridge"
 repository = "https://github.com/gerchowl/telegram-bot"
 
 # Binaries are auto-discovered from src/bin/{tg-send,tg-bot}.rs; the shared
