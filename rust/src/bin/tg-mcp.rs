@@ -134,24 +134,43 @@ fn secret_eq(a: &str, b: &str) -> bool {
     for i in 0..a.len() {
         diff |= a[i] ^ b[i];
     }
-    diff == 0
+    // black_box so the optimiser can't reason about the accumulator and turn
+    // this back into an early-exit compare.
+    std::hint::black_box(diff) == 0
+}
+
+/// Resolve once and return the address to bind, having checked EVERY candidate.
+///
+/// Validating one address and then handing the original string to
+/// `TcpListener::bind` would let bind re-resolve and land somewhere else: DNS
+/// order isn't stable, and bind walks the list on failure. So a name resolving
+/// to both a tailnet and a LAN address could validate on the former and bind
+/// the latter. Every candidate must pass, and the caller binds the concrete
+/// SocketAddr this returns.
+fn resolve_bind_addr(addr: &str) -> Result<std::net::SocketAddr, String> {
+    use std::net::ToSocketAddrs;
+    let addrs: Vec<_> = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("cannot parse as <addr:port>: {e}"))?
+        .collect();
+    let first = *addrs
+        .first()
+        .ok_or_else(|| "resolved to no address".to_string())?;
+    for sa in &addrs {
+        check_bind_addr(*sa)?;
+    }
+    Ok(first)
 }
 
 /// Reject a listen address that isn't a Tailscale address or loopback.
 ///
-/// This is a BIND sanity check, not authorization — being in the CGNAT range
-/// proves the peer is on some tailnet, not that it is yours; the shared secret
-/// does the authorizing. What this stops is the one catastrophic misconfig:
-/// `0.0.0.0`, `::` or a LAN address puts a daemon that can message you as you
-/// on an interface anyone can reach. Fails closed, because the failure is
-/// silent and the blast radius is the owner's phone.
-fn check_bind_addr(addr: &str) -> Result<(), String> {
-    use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-    let sa: SocketAddr = addr
-        .to_socket_addrs()
-        .map_err(|e| format!("cannot parse as <addr:port>: {e}"))?
-        .next()
-        .ok_or_else(|| "resolved to no address".to_string())?;
+/// A BIND sanity check, not authorization — being in the CGNAT range proves the
+/// peer is on some tailnet, not that it is yours; the shared secret does the
+/// authorizing. What this stops is the one catastrophic misconfig: `0.0.0.0`,
+/// `::` or a LAN address puts a daemon that can message you as you on an
+/// interface anyone can reach.
+fn check_bind_addr(sa: std::net::SocketAddr) -> Result<(), String> {
+    use std::net::IpAddr;
     match sa.ip() {
         IpAddr::V4(v4) if v4.is_loopback() => Ok(()),
         // Tailscale hands out 100.64.0.0/10 (CGNAT, RFC 6598).
@@ -171,12 +190,25 @@ fn check_bind_addr(addr: &str) -> Result<(), String> {
     }
 }
 
-/// Questions that must not be answerable with one distracted tap. An agent that
+/// Asks that must not be answerable with one distracted tap. An agent that
 /// ingested a poisoned README can phrase a plausible `ask`; the authenticated
 /// client IS the attacker in that case, so no amount of transport auth helps.
 /// For this phrasing class we drop the buttons and require a typed reply.
-fn is_destructive(question: &str) -> bool {
-    let q = question.to_lowercase();
+///
+/// Scans EVERY string the human will see, not just the question. The button
+/// label is what people actually read, so checking only the question missed the
+/// obvious evasion: `question: "Proceed?"` with `options: ["Force push to
+/// main", "Cancel"]`.
+///
+/// Be clear about what this is: a speed bump for phrasings that read as
+/// destructive, not a boundary. It is a denylist, so a determined injection can
+/// word its way around it ("purge the customer records"). It is here to catch
+/// the careless and the obvious, and it deliberately errs toward friction — a
+/// benign question mentioning production loses its buttons, which costs one
+/// typed reply. The real control is that irreversible actions should not be
+/// reachable by a single tap at all.
+fn is_destructive(parts: &[&str]) -> bool {
+    let q = parts.join(" \u{1}").to_lowercase();
     [
         "--force",
         "-f ",
@@ -187,8 +219,12 @@ fn is_destructive(question: &str) -> bool {
         "drop database",
         "truncate",
         "delete from",
+        "delete all",
+        "overwrite",
+        "purge",
         "deploy to prod",
         "deploy prod",
+        "to prod",
         "production",
         "reset --hard",
         "push to main",
@@ -197,6 +233,8 @@ fn is_destructive(question: &str) -> bool {
         "rotate the",
         "wipe",
         "destroy",
+        "format /",
+        "shutdown",
     ]
     .iter()
     .any(|needle| q.contains(needle))
@@ -290,13 +328,16 @@ fn run_daemon() -> Result<()> {
         // Two gates before this port opens, both fail-closed. A daemon that can
         // send Telegram messages as you must never end up on a LAN or public
         // interface, and it must never accept an unidentified peer.
-        if let Err(why) = check_bind_addr(&addr) {
-            eprintln!(
-                "tg-mcp daemon: REFUSING to listen on {addr}: {why}\n  \
-                 Bind to this host's Tailscale address. Unix socket still served."
-            );
-            return run_poll_loop(&router);
-        }
+        let bind_to = match resolve_bind_addr(&addr) {
+            Ok(sa) => sa,
+            Err(why) => {
+                eprintln!(
+                    "tg-mcp daemon: REFUSING to listen on {addr}: {why}\n  \
+                     Bind to this host's Tailscale address. Unix socket still served."
+                );
+                return run_poll_loop(&router);
+            }
+        };
         if tcp_token().is_none() {
             eprintln!(
                 "tg-mcp daemon: REFUSING to listen on {addr}: TG_MCP_LISTEN is set but \
@@ -306,7 +347,7 @@ fn run_daemon() -> Result<()> {
             );
             return run_poll_loop(&router);
         }
-        match TcpListener::bind(&addr) {
+        match TcpListener::bind(bind_to) {
             Ok(tl) => {
                 eprintln!("tg-mcp daemon: TCP listening on {addr}");
                 let router = router.clone();
@@ -568,7 +609,13 @@ fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
             // on an authorised host can choose both. Strip the buttons and make
             // the human type — the friction IS the mitigation.
             let question = req.get("question").and_then(|v| v.as_str()).unwrap_or("");
-            let destructive = is_destructive(question);
+            let recommendation = req
+                .get("recommendation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut scan: Vec<&str> = vec![question, recommendation, default.as_str()];
+            scan.extend(options.iter().map(String::as_str));
+            let destructive = is_destructive(&scan);
             let options: Vec<String> = if destructive { Vec::new() } else { options };
 
             let tok = next_token();

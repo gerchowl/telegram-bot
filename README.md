@@ -493,13 +493,23 @@ Every `ask` carries a `via` footer showing where the daemon saw the request come
 from — `local`, or the peer address. It is derived from the socket, not from the
 request, so an agent cannot claim to be somewhere it isn't.
 
-Questions phrased around irreversible actions (`--force`, `rm -rf`, `drop
-table`, `push to main`, `deploy prod`, …) are sent **without buttons** and
-require a typed reply. This is not about authentication: a coding agent ingests
-issue text, dependency READMEs and web pages, any of which can carry a prompt
+Asks phrased around irreversible actions (`--force`, `rm -rf`, `drop table`,
+`push to main`, `deploy prod`, …) are sent **without buttons** and require a
+typed reply. This is not about authentication: a coding agent ingests issue
+text, dependency READMEs and web pages, any of which can carry a prompt
 injection, and an injected agent on a fully authorised host can phrase a
 plausible question. The button label is what people actually read on a
-lockscreen. For the actions that cannot be undone, the friction is the point.
+lockscreen. For actions that cannot be undone, the friction is the point.
+
+Every string the message renders is scanned — question, options, default and
+recommendation — not just the question. Checking only the question left the
+obvious hole: `"Proceed?"` with a `"Force push to main"` button.
+
+**Treat this as a speed bump, not a boundary.** It is a denylist, so a
+determined injection can word around it, and it deliberately errs toward
+friction — a benign question mentioning production loses its buttons, which
+costs you one typed reply. It catches the careless and the obvious. The real
+control is not making irreversible actions reachable by a single tap.
 
 #### Sending files
 

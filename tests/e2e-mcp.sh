@@ -193,6 +193,18 @@ rpc '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"ask","argu
 want "warns that it looks irreversible" 'irreversible-sounding' "$MOCK_LOG"
 absent "no inline keyboard offered" 'inline_keyboard' "$MOCK_LOG"
 want "asks for a typed reply instead" 'Reply to this message' "$MOCK_LOG"
+# The bypass that mattered: a harmless question with a destructive BUTTON.
+# Checking only the question missed this, which defeats the whole mitigation —
+# the label is what a distracted person reads and taps.
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"ask","arguments":{"question":"Proceed?","options":["Force push to main","Cancel"],"default":"Cancel","timeout_s":2}}}' >/dev/null
+absent "a destructive BUTTON also withholds the keyboard" 'inline_keyboard' "$MOCK_LOG"
+want "and says why" 'irreversible-sounding' "$MOCK_LOG"
+# Same for the default and the recommendation, which are rendered too.
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"ask","arguments":{"question":"Continue?","options":["ok"],"default":"rm -rf /var/lib","timeout_s":2}}}' >/dev/null
+absent "a destructive default is caught" 'inline_keyboard' "$MOCK_LOG"
+
 # A benign question keeps its buttons.
 : >"$MOCK_LOG"
 rpc '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"ask","arguments":{"question":"which colour?","options":["red","blue"],"default":"red","timeout_s":2}}}' >/dev/null
