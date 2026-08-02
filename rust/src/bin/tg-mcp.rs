@@ -10,7 +10,7 @@
 //!     clients (see below).
 //!
 //!   * `tg-mcp` (default) — an MCP stdio server (newline-delimited JSON-RPC 2.0
-//!     on stdin/stdout) exposing two tools, `notify` and `ask`, each of which
+//!     on stdin/stdout) exposing `notify`, `send_file` and `ask`, each of which
 //!     just forwards to the daemon over the socket. Claude Code spawns one of
 //!     these per agent; they never poll, so they never fight over the update
 //!     stream.
@@ -19,7 +19,7 @@
 //! target chat is `$TG_CHAT_ID` or config `TELEGRAM_CHAT_ID`. Socket path is
 //! `$TG_MCP_SOCK` or `${XDG_RUNTIME_DIR:-~/.config/telegram-bot}/tg-mcp.sock`.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -331,6 +331,44 @@ fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
                 Err(e) => writeln!(writer, "{}", json!({"error": e.to_string()}))?,
             }
         }
+        // The client reads and encodes the file: in central mode the daemon is
+        // on another host across the tailnet, where a client-side path means
+        // nothing. So bytes travel, not paths.
+        "send_file" => {
+            let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("file");
+            let caption = req.get("caption").and_then(|v| v.as_str()).unwrap_or("");
+            let silent = req.get("silent").and_then(|v| v.as_bool()).unwrap_or(false);
+            let inline = req.get("inline").and_then(|v| v.as_bool()).unwrap_or(false);
+            let body = format!("<b>[{}]</b>{}", hostname(), {
+                if caption.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{}", html_escape(caption))
+                }
+            });
+            let decoded = req
+                .get("data_b64")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("send_file: missing data_b64"))
+                .and_then(|d| {
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, d)
+                        .context("decoding data_b64")
+                });
+            match decoded {
+                Ok(bytes) => {
+                    let res = if inline {
+                        r.tg.send_photo(&r.chat, name, &bytes, Some(&body), Some("HTML"), silent)
+                    } else {
+                        r.tg.send_document(&r.chat, name, &bytes, Some(&body), Some("HTML"), silent)
+                    };
+                    match res {
+                        Ok(()) => writeln!(writer, "{}", json!({"ok": true}))?,
+                        Err(e) => writeln!(writer, "{}", json!({"error": e.to_string()}))?,
+                    }
+                }
+                Err(e) => writeln!(writer, "{}", json!({"error": e.to_string()}))?,
+            }
+        }
         "ask" => {
             let options: Vec<String> = req
                 .get("options")
@@ -593,6 +631,23 @@ fn handle_tool_call(id: Option<Value>, params: Option<&Value>) -> Value {
                 }
             })
         }
+        "send_file" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            read_for_upload(path).and_then(|(bytes, name)| {
+                let mut req = json!({
+                    "op": "send_file",
+                    "name": name,
+                    "data_b64": base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD, &bytes),
+                });
+                for k in ["caption", "silent", "inline"] {
+                    if let Some(v) = args.get(k) {
+                        req[k] = v.clone();
+                    }
+                }
+                ipc_call(req).map(|_| format!("sent {name} ({} bytes)", bytes.len()))
+            })
+        }
         other => Err(anyhow!("unknown tool {other}")),
     };
 
@@ -604,6 +659,52 @@ fn handle_tool_call(id: Option<Value>, params: Option<&Value>) -> Value {
             "content": [{"type": "text", "text": format!("tg-mcp error: {e:#}")}], "isError": true
         }}),
     }
+}
+
+/// Telegram's bot-API upload cap. Enforced client-side, before base64 inflates
+/// the payload by a third on its way through the IPC socket.
+const MAX_UPLOAD: u64 = 50_000_000;
+
+/// Read a file the agent asked to send, confined to `TG_MCP_MEDIA_ROOT`.
+///
+/// Unset means unrestricted, which is the right default here: unlike the bot's
+/// command runner, this daemon acts for an agent that already reads the
+/// filesystem and could paste a file's contents into `notify`. The root is for
+/// operators who want the daemon's reach bounded anyway — set it and a stray
+/// or manipulated path can't turn one Telegram chat into a file-exfiltration
+/// channel. Resolution goes through canonicalize, so symlinks out are rejected.
+fn read_for_upload(path: &str) -> Result<(Vec<u8>, String)> {
+    if path.is_empty() {
+        bail!("send_file: path is required");
+    }
+    let real = std::fs::canonicalize(path).with_context(|| format!("no such file: {path}"))?;
+    if let Ok(root) = std::env::var("TG_MCP_MEDIA_ROOT") {
+        if !root.is_empty() {
+            let root = std::fs::canonicalize(&root)
+                .with_context(|| format!("TG_MCP_MEDIA_ROOT '{root}' does not exist"))?;
+            if !real.starts_with(&root) {
+                bail!("path is outside TG_MCP_MEDIA_ROOT");
+            }
+        }
+    }
+    let meta = std::fs::metadata(&real).context("stat")?;
+    if !meta.is_file() {
+        bail!("not a regular file");
+    }
+    if meta.len() > MAX_UPLOAD {
+        bail!(
+            "file is {} MB, over Telegram's {} MB bot limit",
+            meta.len() / 1_000_000,
+            MAX_UPLOAD / 1_000_000
+        );
+    }
+    let bytes = std::fs::read(&real).context("read")?;
+    let name = real
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file")
+        .to_string();
+    Ok((bytes, name))
 }
 
 fn tools_spec() -> Value {
@@ -618,6 +719,20 @@ fn tools_spec() -> Value {
                     "level": {"type": "string", "enum": ["info", "warn"], "description": "info = silent delivery (default); warn = rings."}
                 },
                 "required": ["text"]
+            }
+        },
+        {
+            "name": "send_file",
+            "description": "Send the user a FILE via Telegram — a chart, screenshot, log, PDF, diff. One-way like `notify`; does not block and returns no answer. Use it when the artefact IS the message: something the user needs to look at rather than read as text. Do NOT use it to dump output that would read fine as a `notify` line, and do NOT send anything you have not been asked for — every file is a phone notification. Prefer one file with a clear caption over several. The caption is the message body; keep it to one line.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the file to send. Read on the machine running this tool."},
+                    "caption": {"type": "string", "description": "One-line description of what the file is. Shown with the file."},
+                    "inline": {"type": "boolean", "description": "Render as a photo instead of a file attachment. Only for images, and only when a quick look matters more than fidelity — Telegram re-encodes and downscales. Default false, which preserves the bytes exactly.", "default": false},
+                    "silent": {"type": "boolean", "description": "Send without a notification sound.", "default": false}
+                },
+                "required": ["path"]
             }
         },
         {
