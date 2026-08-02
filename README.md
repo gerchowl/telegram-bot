@@ -351,9 +351,10 @@ future tuning.
 ### MCP bridge (`tg-mcp`)
 
 The Rust crate also ships `tg-mcp` — a [Model Context Protocol](https://modelcontextprotocol.io)
-server that gives an agent (Claude Code, etc.) two tools over Telegram: **`notify`**
-(one-way status update) and **`ask`** (blocking question with one-tap inline-button
-options, routed back to the waiting agent). Exposed as the `mcp` flake app:
+server that gives an agent (Claude Code, etc.) three tools over Telegram: **`notify`**
+(one-way status update), **`send_file`** (one-way file — a chart, screenshot, log,
+PDF) and **`ask`** (blocking question with one-tap inline-button options, routed back
+to the waiting agent). Exposed as the `mcp` flake app:
 
 ```sh
 nix run github:gerchowl/telegram-bot#mcp            # stdio MCP client (for an agent)
@@ -385,6 +386,24 @@ or a project `.mcp.json`):
   "env": { "TG_MCP_REMOTE": "100.x.y.z:8765" }
 } } }
 ```
+
+#### Sending files
+
+`send_file` takes a `path`, an optional one-line `caption`, and `inline` (default
+false) to render an image as a photo instead of a file attachment — photos are
+re-encoded and downscaled, so the default preserves the bytes.
+
+The **client** reads the file and ships the bytes to the daemon, not the path:
+in central mode the daemon is on another host across the tailnet, where a
+client-side path means nothing. Files over Telegram's 50 MB bot cap are refused.
+
+Set **`TG_MCP_MEDIA_ROOT`** to confine what the client will read; unset means any
+readable path. Unrestricted is the sensible default here — unlike the bot's
+command runner, this daemon acts for an agent that already reads your filesystem
+and could paste a file's contents into `notify`. Set the root when you want the
+daemon's reach bounded anyway, so a stray or manipulated path can't quietly turn
+one chat into a file-exfiltration channel. Paths are resolved with `canonicalize`,
+so symlinks pointing out of the root are rejected.
 
 ---
 

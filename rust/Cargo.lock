@@ -402,6 +402,7 @@ name = "telegram-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "rpassword",
  "serde_json",
  "ureq",

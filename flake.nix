@@ -336,6 +336,26 @@
                 bash ${./tests/e2e.sh}
                 touch "$out"
               '';
+          # tg-mcp had no coverage at all; send_file puts file bytes on that
+          # path, so this runs a real daemon over a Unix socket with a real
+          # stdio client against the mock API — the two-process split an agent
+          # uses, including central mode where the daemon is on another host.
+          e2e-mcp =
+            pkgs.runCommand "telegram-bot-e2e-mcp"
+              {
+                nativeBuildInputs = [
+                  telegram-bot-rs
+                  pkgs.python3
+                  pkgs.coreutils
+                  pkgs.gnugrep
+                  pkgs.bash
+                ];
+                TGB_MOCK = ./tests/mock.py;
+              }
+              ''
+                bash ${./tests/e2e-mcp.sh}
+                touch "$out"
+              '';
           # tg-onboard drives sops/age for real against the mock API: the token it
           # encrypts must decrypt back byte-identical, and no plaintext may be
           # left on disk. Rust-only — onboarding is interactive, so the suite
