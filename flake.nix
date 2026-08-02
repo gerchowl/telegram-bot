@@ -32,75 +32,11 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        libSh = builtins.readFile ./scripts/lib.sh;
 
-        # Each CLI = shared lib.sh ++ its own script, wrapped so curl/jq/sops/age
-        # are always on PATH. writeShellApplication runs shellcheck at build time.
-        mkTool =
-          {
-            name,
-            src,
-            runtimeInputs ? [ ],
-          }:
-          pkgs.writeShellApplication {
-            inherit name;
-            runtimeInputs = runtimeInputs ++ [
-              pkgs.curl
-              pkgs.jq
-              pkgs.coreutils
-            ];
-            text = libSh + "\n" + builtins.readFile src;
-            meta = {
-              mainProgram = name;
-              license = lib.licenses.mit;
-            };
-          };
-
-        tg-send = mkTool {
-          name = "tg-send";
-          src = ./scripts/tg-send.sh;
-          runtimeInputs = [ pkgs.sops ];
-        };
-        tg-bot = mkTool {
-          name = "tg-bot";
-          src = ./scripts/tg-bot.sh;
-          runtimeInputs = [
-            pkgs.sops
-            pkgs.findutils
-          ];
-        };
-        tg-onboard = mkTool {
-          name = "tg-onboard";
-          src = ./scripts/tg-onboard.sh;
-          runtimeInputs = [
-            pkgs.sops
-            pkgs.age
-          ];
-        };
-        tg-poll = mkTool {
-          name = "tg-poll";
-          src = ./scripts/tg-poll.sh;
-          runtimeInputs = [ pkgs.sops ];
-        };
-
-        telegram-bot = pkgs.symlinkJoin {
-          name = "telegram-bot";
-          paths = [
-            tg-send
-            tg-bot
-            tg-onboard
-            tg-poll
-          ];
-          meta = {
-            description = "tg-send, tg-bot and tg-onboard in one package";
-            license = lib.licenses.mit;
-          };
-        };
-
-        # ---- v2: compiled Rust implementation of tg-send + tg-bot ----
-        # Drop-in compatible with the bash versions (same env contract, flags,
-        # rights model). A single ~small binary per tool, no curl/jq/sops/age in
-        # the runtime closure. tg-onboard stays bash (interactive sops/age glue).
+        # ---- the implementation: compiled Rust (#22) ----
+        # tg-send, tg-bot, tg-poll, tg-onboard and tg-mcp as small binaries with
+        # no curl/jq in the runtime closure. tg-onboard still invokes sops and
+        # age-keygen, but as the user's own tools rather than a shipped closure.
         telegram-bot-rs = pkgs.rustPlatform.buildRustPackage {
           pname = "telegram-bot-rs";
           version = "0.1.0";
@@ -108,7 +44,7 @@
           cargoLock.lockFile = ./rust/Cargo.lock;
           # rustls + webpki-roots: pure-Rust TLS, no openssl-sys/pkg-config needed (see #26).
           meta = {
-            description = "Rust (v2) implementation of tg-send + tg-bot";
+            description = "Telegram bot: tg-send, tg-bot, tg-poll, tg-onboard, tg-mcp";
             license = lib.licenses.mit;
             mainProgram = "tg-send";
           };
@@ -126,8 +62,9 @@
           pkgs.deadnix
         ];
         shfmtFlags = "-i 2 -ci";
-        shFiles = "scripts/*.sh tests/*.sh commands/ping commands/status";
-        # (scripts/*.sh now includes tg-poll.sh)
+        # The implementation is Rust; the shell that remains is test harnesses,
+        # gates and the example commands.
+        shFiles = "tests/*.sh gates/*.sh commands/ping commands/status";
 
         treefmt = pkgs.writeShellApplication {
           name = "fmt";
@@ -203,38 +140,31 @@
       in
       {
         packages = {
-          inherit
-            tg-send
-            tg-bot
-            tg-onboard
-            tg-poll
-            telegram-bot
-            telegram-bot-rs
-            ;
-          default = telegram-bot;
+          inherit telegram-bot-rs;
+          # Historical attr name, kept so existing consumers keep resolving.
+          telegram-bot = telegram-bot-rs;
+          # The compiled implementation is the artifact (#22): `nix run
+          # github:gerchowl/telegram-bot#send` and friends resolve to binaries,
+          # not a curl/jq/sops shell closure.
+          default = telegram-bot-rs;
         };
 
         apps = {
           onboard = {
             type = "app";
-            program = "${tg-onboard}/bin/tg-onboard";
+            program = "${telegram-bot-rs}/bin/tg-onboard";
           };
           send = {
             type = "app";
-            program = "${tg-send}/bin/tg-send";
+            program = "${telegram-bot-rs}/bin/tg-send";
           };
           bot = {
             type = "app";
-            program = "${tg-bot}/bin/tg-bot";
-          };
-          # Rust (v2) entrypoints.
-          send-rs = {
-            type = "app";
-            program = "${telegram-bot-rs}/bin/tg-send";
-          };
-          bot-rs = {
-            type = "app";
             program = "${telegram-bot-rs}/bin/tg-bot";
+          };
+          poll = {
+            type = "app";
+            program = "${telegram-bot-rs}/bin/tg-poll";
           };
           # MCP bridge (notify/ask) for Claude Code & other agents. No args =
           # stdio client of a daemon (via TG_MCP_REMOTE or the local socket);
@@ -246,42 +176,14 @@
           default = self.apps.${system}.onboard;
         };
 
-        # Building the tools = running shellcheck on every script, so this is a
-        # real check. `e2e` runs the scripts against a localhost mock Telegram API.
         checks = {
-          inherit
-            tg-send
-            tg-bot
-            tg-onboard
-            tg-poll
-            ;
           format = checkFormat;
           lint = checkLint;
           licenses = checkLicenses;
+          # The hermetic suite, run against the binaries via a localhost mock
+          # Telegram API. No curl/jq in the closure.
           e2e =
             pkgs.runCommand "telegram-bot-e2e"
-              {
-                nativeBuildInputs = [
-                  tg-send
-                  tg-bot
-                  pkgs.python3
-                  pkgs.curl
-                  pkgs.jq
-                  pkgs.coreutils
-                  pkgs.gnugrep
-                  pkgs.bash
-                ];
-                TGB_COMMANDS = ./commands;
-                TGB_MOCK = ./tests/mock.py;
-              }
-              ''
-                bash ${./tests/e2e.sh}
-                touch "$out"
-              '';
-          # Same hermetic suite, but with the Rust binaries on PATH — proves the
-          # v2 implementation is behaviourally identical. Note: no curl/jq here.
-          e2e-rs =
-            pkgs.runCommand "telegram-bot-e2e-rs"
               {
                 nativeBuildInputs = [
                   telegram-bot-rs
@@ -295,6 +197,28 @@
               }
               ''
                 bash ${./tests/e2e.sh}
+                touch "$out"
+              '';
+          # tg-onboard drives sops/age for real against the mock API: the token it
+          # encrypts must decrypt back byte-identical, and no plaintext may be
+          # left on disk. Rust-only — onboarding is interactive, so the suite
+          # feeds every answer on stdin.
+          e2e-onboard =
+            pkgs.runCommand "telegram-bot-e2e-onboard"
+              {
+                nativeBuildInputs = [
+                  telegram-bot-rs
+                  pkgs.sops
+                  pkgs.age
+                  pkgs.python3
+                  pkgs.coreutils
+                  pkgs.gnugrep
+                  pkgs.bash
+                ];
+                TGB_MOCK = ./tests/mock.py;
+              }
+              ''
+                bash ${./tests/e2e-onboard.sh}
                 touch "$out"
               '';
           # guardrails(local, dogfood): every Markdown surface must be generated, decorator-wrapped,
@@ -326,10 +250,7 @@
           inherit pkgs;
           name = "telegram-bot-dev";
           extra = [
-            tg-send
-            tg-bot
-            tg-onboard
-            tg-poll
+            telegram-bot-rs
             pkgs.curl
             pkgs.jq
             pkgs.sops
@@ -362,7 +283,7 @@
             }:
             pkgs.writeShellApplication {
               inherit name;
-              runtimeInputs = [ tg-send ];
+              runtimeInputs = [ telegram-bot-rs ];
               text = ''
                 ${lib.optionalString (configFile != null) ''export TELEGRAM_BOT_CONFIG="${toString configFile}"''}
                 ${lib.optionalString (chatId != null) ''export TELEGRAM_CHAT_ID="${toString chatId}"''}

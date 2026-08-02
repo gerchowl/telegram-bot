@@ -121,6 +121,32 @@ else
 fi
 rm -f "$MOCK_FAIL_FILE"
 
+echo "== tg-poll: poll id on stdout, options json, flag defaults =="
+: >"$MOCK_LOG"
+env TELEGRAM_BOT_TOKEN=T TELEGRAM_CHAT_ID=42 tg-poll "Deploy?" "yes" "no" >"$T/poll.out"
+want "poll id printed on stdout" 'mockpoll123' "$T/poll.out"
+want "poll chat" '"chat_id": "42"' "$MOCK_LOG"
+want "poll question" '"question": "Deploy?"' "$MOCK_LOG"
+want "options encoded as a json array" '[\"yes\",\"no\"]' "$MOCK_LOG"
+want "non-anonymous by default" '"is_anonymous": "false"' "$MOCK_LOG"
+want "single-answer by default" '"allows_multiple_answers": "false"' "$MOCK_LOG"
+: >"$MOCK_LOG"
+env TELEGRAM_BOT_TOKEN=T tg-poll --chat 7 --multi --anonymous "Q" "a" "b" >/dev/null
+want "--anonymous" '"is_anonymous": "true"' "$MOCK_LOG"
+want "--multi" '"allows_multiple_answers": "true"' "$MOCK_LOG"
+# An option containing a quote must survive JSON encoding, not break the array.
+: >"$MOCK_LOG"
+env TELEGRAM_BOT_TOKEN=T TELEGRAM_CHAT_ID=42 tg-poll 'Q' 'say "hi"' 'no' >/dev/null
+want "quotes in an option are escaped" '[\"say \\\"hi\\\"\",\"no\"]' "$MOCK_LOG"
+# Fewer than two options is a usage error (exit 2), not a silent no-op.
+if env TELEGRAM_BOT_TOKEN=T TELEGRAM_CHAT_ID=42 tg-poll "only" "one" 2>/dev/null; then
+  echo "  FAIL: one option should exit nonzero"
+  fail=$((fail + 1))
+else
+  echo "  PASS: one option exits nonzero"
+  pass=$((pass + 1))
+fi
+
 echo "== tg-bot: authorized command =="
 printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/ping hello"}}]\n' >"$T/u.json"
 : >"$MOCK_LOG"

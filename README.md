@@ -10,13 +10,14 @@ and control channel**. One flake gives you:
   `tg-send "build done"`, `journalctl -u foo | tg-send --file -`.
 - **`tg-bot`** — a long-polling daemon that receives messages and, optionally,
   runs **commands** under a strict rights model.
+- **`tg-poll`** — send a poll and print its id, so `poll_answer` updates can be
+  mapped back to what was asked.
 - **NixOS** (`services.telegram-bot`) and **Home-Manager** modules, plus a
   project **template** and a `mkSend` helper for downstream flakes.
 
-Pure `bash` + `curl` + `jq` at the core; commands are arbitrary executables, so the
-*logic* you wire up can be in any language. A compiled **Rust implementation (v2)**
-of `tg-send`/`tg-bot` is also available — identical behaviour, ~⅓ the runtime closure
-(see [Rust implementation](#rust-implementation-v2)).
+Compiled Rust, shipped as small binaries with no `curl`/`jq` in the runtime
+closure. Commands are arbitrary executables, so the *logic* you wire up can
+still be in any language.
 
 > **The one manual step:** Telegram has no API to *create* a bot — you register it
 > once by hand with [@BotFather](https://t.me/BotFather) in any Telegram client.
@@ -37,7 +38,7 @@ nix run github:gerchowl/telegram-bot#send -- "hello from $(hostname)"
 Or get the CLIs on your PATH:
 
 ```sh
-nix profile install github:gerchowl/telegram-bot   # tg-send, tg-bot, tg-onboard
+nix profile install github:gerchowl/telegram-bot   # tg-send, tg-bot, tg-poll, tg-onboard, tg-mcp
 # or, per-project:
 nix develop github:gerchowl/telegram-bot
 ```
@@ -81,6 +82,30 @@ tg-send "deploy finished ✅"
 df -h | tg-send --file - --silent
 tg-send -p MarkdownV2 "*alert*: disk full on \`$(hostname)\`"
 ```
+
+---
+
+## `tg-poll`
+
+```
+tg-poll [options] "Question" "Option 1" "Option 2" [...]
+
+  -c, --chat ID     target chat (default: $TELEGRAM_CHAT_ID)
+  -m, --multi       allow multiple answers
+      --anonymous   anonymous poll (no voter; can't be tracked)
+      --config PATH use a specific config.env
+```
+
+Prints the poll id on stdout. Token/chat resolution matches `tg-send`; 2–10
+options. Polls are **non-anonymous by default** — Telegram only reports a voter
+for non-anonymous polls, so anonymous polls can't be mapped back to a person:
+
+```sh
+id=$(tg-poll "Deploy to prod?" "yes" "no")
+```
+
+Record the answers by dropping a `_poll_answer` hook in the commands dir; the
+daemon invokes it with `$POLL_ID`, `$POLL_VOTER` and `$POLL_OPTIONS`.
 
 ---
 
@@ -200,8 +225,8 @@ services.telegram-bot = {
 };
 ```
 
-Other tooling on the host sends notifications by putting `tg-send` on the path
-(`environment.systemPackages = [ telegram-bot.packages.${system}.tg-send ];`) — you
+Other tooling on the host sends notifications by putting the package on the path
+(`environment.systemPackages = [ telegram-bot.packages.${system}.default ];`) — you
 don't need the daemon enabled just to *send*.
 
 ### Module options (highlights)
@@ -237,43 +262,31 @@ in pkgs.mkShell { packages = [ send ]; };
 
 ---
 
-## Rust implementation (v2)
+## Implementation
 
-`tg-send` and `tg-bot` also exist as a single compiled Rust crate (`rust/`),
-built by the flake as `packages.telegram-bot-rs`. It is **drop-in compatible** —
-same flags, same env contract, same rights model — and runs the *same* e2e suite
-(`checks.e2e-rs`), so behaviour is identical (the security regression tests pass
-against it too).
+Every tool is one compiled Rust crate (`rust/`), built by the flake as
+`packages.telegram-bot-rs` — also `packages.default`, and `packages.telegram-bot`
+for consumers using the historical attr name.
 
-Why it exists: the bash tools pull `curl`/`jq`/`sops`/`age`/coreutils into the
-runtime closure (~123 MB for `tg-bot` alone). The Rust binaries are ~1 MB each
-with a **~48 MB closure** (glibc + openssl), and ship as standalone binaries you
-can `scp` anywhere. Because there's no shell, the glob/word-split/eval bug classes
-can't occur — arguments go straight to `argv` via `std::process::Command`.
+A bash implementation shipped alongside it until 0.2.0. It was removed once the
+Rust build reached parity: two implementations meant writing every feature twice
+and letting them drift. The tools pulled `curl`/`jq`/`sops`/`age`/coreutils into
+the runtime closure (162 MB); the binaries are ~1 MB each with a **52 MB closure**,
+and `scp` anywhere. With no shell, the glob/word-split/eval bug classes can't
+occur — arguments go straight to `argv` via `std::process::Command`.
+
+`tg-onboard` still invokes `sops` and `age-keygen`, but as your own tools rather
+than a wrapped closure; install them if you use the guided setup.
 
 Use it:
 
 ```sh
-nix run .#telegram-bot-rs -- ...        # tg-send / tg-bot binaries
-nix profile install .#telegram-bot-rs
+nix run github:gerchowl/telegram-bot#send -- "hello"
+nix profile install github:gerchowl/telegram-bot
 ```
 
-In the NixOS module, just point `package` at it (the unit runs `${package}/bin/tg-bot`):
-
-```nix
-services.telegram-bot = {
-  enable = true;
-  package = telegram-bot.packages.${system}.telegram-bot-rs; # Rust daemon
-  tokenFile = config.sops.secrets.telegram_bot_token.path;
-};
-```
-
-`tg-onboard` stays bash (one-time interactive sops/age setup) — run it once, then
-the Rust daemon/sender consume the same `config.env` / `tokenFile`. The bash tools
-remain the default; the Rust build is opt-in until it's had more mileage.
-
-Could shrink further (rustls instead of native-tls drops openssl; musl static for a
-fully self-contained binary) — noted as future tuning.
+Could shrink further (musl static for a fully self-contained binary) — noted as
+future tuning.
 
 ### MCP bridge (`tg-mcp`)
 
@@ -319,14 +332,17 @@ or a project `.mcp.json`):
 
 ```
 flake.nix                 packages · apps · nixos/home modules · template · lib.mkSend
-rust/                     v2: compiled tg-send + tg-bot (Cargo crate, buildRustPackage)
-scripts/lib.sh            shared: config load, token resolution, send helper
-scripts/tg-onboard.sh     guided BotFather setup + sops encrypt + chat-id discovery
-scripts/tg-send.sh        outbound CLI (message / document)
-scripts/tg-bot.sh         long-polling daemon + command runner
+rust/src/lib.rs           shared: config load, token resolution, Telegram client
+rust/src/bin/tg-onboard   guided BotFather setup + sops encrypt + chat-id discovery
+rust/src/bin/tg-send      outbound CLI (message / document)
+rust/src/bin/tg-bot       long-polling daemon + command runner
+rust/src/bin/tg-poll      send a poll, print its id
+rust/src/bin/tg-mcp       MCP server + reply-routing daemon
 modules/nixos.nix         services.telegram-bot (hardened systemd unit)
 modules/home-manager.nix  user-service variant
 commands/{ping,status}    example drop-in commands
+gates/                    repo-local guardrails (docs-from-code)
+tests/                    hermetic e2e suites + mock Telegram API
 template/                 `nix flake init -t` scaffold for a consuming project
 ```
 

@@ -41,7 +41,7 @@ jobs:
         with:
           name: gerchowl
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      # One command runs shellcheck (build-time), the format/lint/licenses
-      # checks, module evaluation, and the hermetic e2e (incl. the RCE
-      # regression tests).
+      # One command runs the format/lint/licenses checks, the hermetic e2e
+      # suites (incl. the RCE regression tests and the tg-onboard sops
+      # round-trip), and the docs-from-code gate.
       - run: nix flake check -L

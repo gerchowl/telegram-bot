@@ -17,14 +17,14 @@ cargo-audit`), the formatters/linters (`nixfmt shfmt statix deadnix`), and `gitl
 just                 # list recipes
 just fmt             # nix fmt (nix + shell + rust)
 just check           # nix flake check (the full gate)
-just build-rs        # build the Rust v2 binaries
+just build           # build the binaries
 just cargo clippy    # run cargo in rust/
 just audit           # cargo audit (RustSec CVEs)
-just sizes           # closure size: rust v2 vs bash daemon
+just sizes           # closure size of the shipped artifact
 ```
 
 `just` recipes are thin wrappers over the flake's `nix run .#…` apps and `nix` commands
-— the apps (`onboard`/`send`/`bot`, plus `send-rs`/`bot-rs`) are the canonical entrypoints.
+— the apps (`onboard`/`send`/`bot`/`poll`/`mcp`) are the canonical entrypoints.
 
 ## Format, lint, test — all via the flake
 
@@ -35,12 +35,12 @@ nix flake check      # the full gate (see below)
 
 `nix flake check` is the single source of truth and is exactly what CI runs. It covers:
 
-- **shellcheck** on every script (build-time, via `writeShellApplication`),
 - **format** (`checks.format`) — `nixfmt --check` + `shfmt -d` + `rustfmt --check`,
 - **lint** (`checks.lint`) — `statix` + `deadnix`,
 - **licenses** (`checks.licenses`) — asserts every dependency is free-licensed, with an SPDX report,
-- **e2e** (`checks.e2e` + `checks.e2e-rs`) — bash *and* Rust daemon/CLIs against a mock Telegram API, including the path-traversal / glob RCE regression tests,
-- NixOS / Home-Manager module evaluation.
+- **e2e** (`checks.e2e`) — the daemon/CLIs against a mock Telegram API, including the path-traversal / glob RCE regression tests,
+- **e2e-onboard** (`checks.e2e-onboard`) — `tg-onboard` driving `sops`/`age` for real: the token must decrypt back byte-identical and leave no plaintext on disk,
+- **docs-from-code** (`checks.docs-from-code`) — Markdown must be generated, decorator-wrapped or whitelisted.
 
 ## Security & supply-chain CI
 

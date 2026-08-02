@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Lars Gerchow
 //! tg-bot — long-polling daemon. Receives messages and (optionally) runs
-//! commands under the same safe rights model as the bash version:
+//! commands under a safe rights model:
 //!   * post-only by default (TELEGRAM_POST_ONLY=1) — built-ins only;
 //!   * command mode needs an allowlist AND a commands dir;
 //!   * command names are restricted to [A-Za-z0-9_-] (no traversal);
@@ -182,7 +182,7 @@ fn handle_update(
 }
 
 /// Auto-register the `/` menu (Bot API setMyCommands) from each command's first
-/// `# desc:` line — same as the bash daemon. No-op in post-only mode, without a
+/// `# desc:` line. No-op in post-only mode, without a
 /// commands dir, or when `TELEGRAM_SET_COMMANDS=0`. Telegram command names must be
 /// 1–32 chars of `[a-z0-9_]`; others (and `_`-prefixed hooks) are skipped.
 fn register_commands(tg: &Tg, cfg: &Config, post_only: bool, commands_dir: Option<&str>) {
@@ -313,7 +313,7 @@ fn run_command(
         out
     };
     // A command may opt into a Telegram parse mode by emitting a sentinel first line
-    // `\x01parse_mode=MarkdownV2` (stripped before sending) — matches the bash daemon.
+    // `\x01parse_mode=MarkdownV2` (stripped before sending).
     let mut parse_mode: Option<String> = None;
     if let Some(rest) = msg.strip_prefix("\u{1}parse_mode=") {
         let (mode, after) = match rest.split_once('\n') {
@@ -403,7 +403,7 @@ fn run_with_timeout(path: &Path, argv: &[&str], chat: &str, cmd: &str, secs: u64
 
 /// A non-anonymous poll vote: run the optional `_poll_answer` hook in the commands dir with
 /// POLL_ID / POLL_OPTIONS (JSON array of selected indexes) / POLL_VOTER; any output goes to the
-/// configured chat as a confirmation. Mirrors the bash daemon.
+/// configured chat as a confirmation.
 fn handle_poll_answer(tg: &Tg, upd: &serde_json::Value, commands_dir: Option<&str>, secs: u64) {
     let dir = match commands_dir {
         Some(d) => d,

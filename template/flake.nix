@@ -21,10 +21,11 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in
       {
-        # `nix develop` gives you tg-send / tg-onboard on PATH.
+        # `nix develop` gives you tg-send / tg-poll / tg-onboard on PATH.
+        # sops + age are what tg-onboard shells out to during setup.
         devShells.default = pkgs.mkShell {
           packages = [
-            telegram-bot.packages.${system}.telegram-bot
+            telegram-bot.packages.${system}.default
             pkgs.sops
             pkgs.age
           ];

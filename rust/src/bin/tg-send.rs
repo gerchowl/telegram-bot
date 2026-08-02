@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Lars Gerchow
-//! tg-send — push a message or document to Telegram. Drop-in compatible with
-//! the bash tg-send: same flags, env contract and token/chat resolution.
+//! tg-send — push a message or document to Telegram. Token resolution is
+//! env > token file > sops; chat is --chat > $TELEGRAM_CHAT_ID.
 
 use std::io::{IsTerminal, Read};
 use std::process::exit;
