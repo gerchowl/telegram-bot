@@ -1,6 +1,6 @@
 # telegram-bot — project template
 
-<!-- guardrails-ok-begin: scaffold guidance for a consuming project; the flake it describes is template/flake.nix -->
+<!-- guardrails-ok-begin: scaffold guidance; the flake it describes is template/flake.nix -->
 
 This project consumes the [`telegram-bot`](https://github.com/gerchowl/telegram-bot) flake.
 

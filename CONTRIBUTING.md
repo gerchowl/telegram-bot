@@ -2,7 +2,7 @@
 
 ## Dev environment
 
-<!-- guardrails-ok-begin: how to get a shell; tool list is short-lived prose, reviewed on change -->
+<!-- guardrails-ok-begin: how to get a shell -->
 
 ```sh
 direnv allow         # auto-loads the dev shell on cd (needs nix-direnv) — preferred
@@ -17,7 +17,7 @@ cargo-audit`), the formatters/linters (`nixfmt shfmt statix deadnix`), and `gitl
 
 ## Tasks — `just`
 
-<!-- guardrails-ok-begin: recipe blurbs; the recipes themselves live in the justfile -->
+<!-- guardrails-ok-begin: recipe blurbs; the recipes live in the justfile -->
 
 ```sh
 just                 # list recipes
@@ -36,7 +36,7 @@ just sizes           # closure size of the shipped artifact
 
 ## Format, lint, test — all via the flake
 
-<!-- guardrails-ok-begin: explains what the gate is for; the gate list itself is generated below -->
+<!-- guardrails-ok-begin: explains what the gate is for; the gate list itself is generated -->
 
 ```sh
 nix fmt              # format all *.nix (nixfmt), shell (shfmt), rust (rustfmt)
@@ -51,6 +51,7 @@ nix flake check      # the full gate (see below)
 - **`lint`** — `statix` + `deadnix`
 - **`licenses`** — every dependency is free-licensed, with an SPDX report
 - **`e2e`** — the daemon and CLIs against a mock Telegram API, incl. the path-traversal / glob RCE regression tests
+- **`e2e-mcp`**
 - **`e2e-onboard`** — `tg-onboard` driving `sops`/`age` for real — the token must decrypt back byte-identical and leave no plaintext behind
 - **`docs-from-code`** — Markdown must be generated, decorator-wrapped or whitelisted, and generated blocks must be current
 <!-- /generated -->
@@ -59,7 +60,7 @@ nix flake check      # the full gate (see below)
 
 ## Security & supply-chain CI
 
-<!-- guardrails-ok-begin: describes workflows in .github/workflows — narrative summary -->
+<!-- guardrails-ok-begin: narrative summary of .github/workflows -->
 
 Beyond the gate above, separate workflows run:
 
@@ -74,7 +75,7 @@ Beyond the gate above, separate workflows run:
 
 ## Distribution
 
-<!-- guardrails-ok-begin: release/consumption guidance -->
+<!-- guardrails-ok-begin: release and consumption guidance -->
 
 - **Nix users**: CI pushes built outputs to a Cachix cache (`gerchowl`) so consumers
   auto-fetch prebuilt binaries per-OS instead of compiling. Setup (one-time): create the
@@ -88,7 +89,7 @@ Beyond the gate above, separate workflows run:
 
 ## Pre-commit hooks
 
-<!-- guardrails-ok-begin: explains the hook setup in .pre-commit-config.yaml -->
+<!-- guardrails-ok-begin: explains .pre-commit-config.yaml -->
 
 Hooks live in `.pre-commit-config.yaml` and work with [`prek`](https://github.com/j178/prek) or `pre-commit`:
 
@@ -103,7 +104,7 @@ On push: the full `nix flake check`.
 
 ## Commit messages — Conventional Commits
 
-<!-- guardrails-ok-begin: the commit convention release-please depends on -->
+<!-- guardrails-ok-begin: the convention release-please depends on -->
 
 Releases are automated by [release-please](https://github.com/googleapis/release-please), which reads
 [Conventional Commits](https://www.conventionalcommits.org/) to compute the next version and the changelog:

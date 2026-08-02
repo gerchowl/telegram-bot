@@ -24,6 +24,26 @@ mapfile -t files < <(git ls-files '*.md' 2>/dev/null)
 [ "${#files[@]}" -gt 0 ] || exit 0
 
 stale=0
+
+# A guardrails or generated marker inside a fenced code block is always a bug:
+# GitHub renders it as literal text, and docs-from-code.sh skips fenced lines,
+# so a stray `-end` never closes its wrap — the block then silently swallows
+# every following section under one unrelated reason. This is exactly how the
+# first cut of the #23/#24 wrapping went wrong (a `# comment` inside a ```sh
+# block was mistaken for a heading), so it is checked every run, not just under
+# --check.
+for f in "${files[@]}"; do
+  bad="$(awk '
+    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+    fence && /<!-- (guardrails-ok|generated:|\/generated)/ { print FILENAME ":" FNR ": " $0 }
+  ' "$f")"
+  if [ -n "$bad" ]; then
+    echo "gen-docs: marker inside a fenced code block — it will render literally and will not close its wrap:" >&2
+    printf '%s\n' "$bad" >&2
+    exit 2
+  fi
+done
+
 for f in "${files[@]}"; do
   grep -q '<!-- generated:' "$f" || continue
   out="$(mktemp)"
@@ -37,7 +57,9 @@ for f in "${files[@]}"; do
         cmd="${cmd%-->}"
         # shellcheck disable=SC2001
         cmd="$(printf '%s' "$cmd" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-        if ! bash -c "$cmd" >>"$out" 2>/dev/null; then
+        # stderr is deliberately NOT swallowed: a generator that fails needs to
+        # say why, or a broken doc surface looks like an unexplained build error.
+        if ! bash -c "$cmd" >>"$out"; then
           echo "gen-docs: command failed in $f: $cmd" >&2
           rm -f "$out"
           exit 2

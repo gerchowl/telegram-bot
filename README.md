@@ -29,7 +29,7 @@ still be in any language.
 
 ## Quick start
 
-<!-- guardrails-ok-begin: onboarding narrative; the commands themselves are in fenced blocks -->
+<!-- guardrails-ok-begin: onboarding narrative; the commands are in fenced blocks -->
 
 From inside the project you want notifications for:
 
@@ -43,10 +43,6 @@ Or get the CLIs on your PATH:
 
 ```sh
 nix profile install github:gerchowl/telegram-bot   # tg-send, tg-bot, tg-poll, tg-onboard, tg-mcp
-<!-- guardrails-ok-end -->
-
-<!-- guardrails-ok-end -->
-
 # or, per-project:
 nix develop github:gerchowl/telegram-bot
 ```
@@ -64,9 +60,11 @@ have one. Keep that file private (it decrypts the token); it is **not** in the r
 
 ---
 
+<!-- guardrails-ok-end -->
+
 ## `tg-send`
 
-<!-- guardrails-ok-begin: resolution-order explanation; the usage block above it is the arg parser's own text -->
+<!-- guardrails-ok-begin: resolution-order explanation; the usage block is the arg parser's own text -->
 
 ```
 tg-send [options] [message]
@@ -99,7 +97,7 @@ tg-send -p MarkdownV2 "*alert*: disk full on \`$(hostname)\`"
 
 ## `tg-poll`
 
-<!-- guardrails-ok-begin: why polls default to non-anonymous — a Telegram API constraint, not our code -->
+<!-- guardrails-ok-begin: why polls default to non-anonymous — a Telegram API constraint -->
 
 ```
 tg-poll [options] "Question" "Option 1" "Option 2" [...]
@@ -150,18 +148,12 @@ Guarantees in command mode:
 
 ### Adding a command
 
-<!-- guardrails-ok-begin: authoring guide for user-written commands -->
-
 A command is just an executable in the commands dir. Whatever it prints (stdout +
 stderr) is sent back. The daemon exports `TG_CHAT_ID` and `TG_COMMAND`; message words
 arrive as `$1, $2, …`.
 
 ```sh
 cat > commands/deploy <<'EOF'
-<!-- guardrails-ok-end -->
-
-<!-- guardrails-ok-end -->
-
 #!/usr/bin/env bash
 set -euo pipefail
 systemctl restart myapp
@@ -222,14 +214,10 @@ occurrence wins. Use `document` unless you specifically want inline rendering �
 
 ### The `/` menu and `/help` (auto-registered)
 
-<!-- guardrails-ok-begin: explains which surface needs a desc and why; the behaviour itself is tested in e2e.sh -->
-
 Give a command a `# desc:` line and `tg-bot` registers the Telegram **`/` autocomplete
 menu** for you on startup (Bot API `setMyCommands`) — no manual BotFather `/setcommands`:
 
 ```sh
-<!-- guardrails-ok-end -->
-
 #!/usr/bin/env bash
 # desc: restart myapp
 set -euo pipefail
@@ -252,6 +240,8 @@ requires a description per entry. Set `TELEGRAM_SET_COMMANDS=0` to opt out of th
 menu (e.g. if you manage it by hand); `/help` is unaffected.
 
 ---
+
+<!-- guardrails-ok-end -->
 
 ## NixOS service
 
@@ -316,8 +306,8 @@ don't need the daemon enabled just to *send*.
 
 | option | default | description |
 |--------|---------|-------------|
-| `enable` | `false` | Enable the daemon. |
-| `package` | the flake's `telegram-bot-rs` | Package providing `bin/tg-bot`. |
+| `enable` | `false` | Telegram bot polling daemon (tg-bot) |
+| `package` | `telegram-bot-rs` | Package providing `bin/tg-bot`. |
 | `tokenFile` | `null` | Path to a file containing **only** the bot token. |
 | `chatId` | `null` | Default chat id used by tg-send / built-in replies. |
 | `postOnly` | `true` | When true the bot only sends messages and answers built-ins (/start, /id, /help); all inbound commands are refused. |
@@ -338,8 +328,8 @@ don't need the daemon enabled just to *send*.
 
 | option | default | description |
 |--------|---------|-------------|
-| `enable` | `false` | Enable the daemon. |
-| `package` | the flake's `telegram-bot-rs` | Package providing `bin/tg-bot`. |
+| `enable` | `false` | Telegram bot polling daemon (user service) |
+| `package` | `telegram-bot-rs` | Package providing `bin/tg-bot`. |
 | `tokenFile` | `null` | Path to a file containing only the bot token. |
 | `chatId` | `null` | Default chat id. |
 | `postOnly` | `true` | Send-only when true; enable the command runner when false. |
@@ -401,7 +391,7 @@ in pkgs.mkShell { packages = [ send ]; };
 
 ## Implementation
 
-<!-- guardrails-ok-begin: the record of why bash was removed and what the closure costs — history, not state -->
+<!-- guardrails-ok-begin: why bash was removed and what the closure costs — history, not state -->
 
 Every tool is one compiled Rust crate (`rust/`), built by the flake as
 `packages.telegram-bot-rs` — also `packages.default`, and `packages.telegram-bot`
@@ -428,8 +418,6 @@ Could shrink further (musl static for a fully self-contained binary) — noted a
 future tuning.
 
 ### MCP bridge (`tg-mcp`)
-
-<!-- guardrails-ok-begin: architecture rationale for the daemon/client split and the media root -->
 
 The Rust crate also ships `tg-mcp` — a [Model Context Protocol](https://modelcontextprotocol.io)
 server that gives an agent (Claude Code, etc.) three tools over Telegram: **`notify`**
@@ -487,8 +475,6 @@ one chat into a file-exfiltration channel. Paths are resolved with `canonicalize
 so symlinks pointing out of the root are rejected.
 
 ---
-
-<!-- guardrails-ok-end -->
 
 <!-- guardrails-ok-end -->
 
@@ -559,5 +545,7 @@ MIT — see [LICENSE](LICENSE). Not affiliated with or endorsed by Telegram.
 "Telegram" is a trademark of Telegram Messenger Inc.; used here descriptively to
 identify the API this tool talks to. You, the bot operator, are responsible for
 compliance with [Telegram's Bot Terms](https://telegram.org/tos).
+
+<!-- guardrails-ok-end -->
 
 <!-- guardrails-ok-end -->

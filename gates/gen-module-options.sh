@@ -7,8 +7,16 @@
 # that isn't there, or miss one that is.
 #
 # Parses `name = mkOption { ... description = "..."; ... }` blocks. The nix is
-# nixfmt-formatted, so the shape is stable; a malformed block yields no row
-# rather than a wrong one.
+# nixfmt-formatted, so the shape is stable, and the parse is cross-checked
+# against a looser detector below — a shape it cannot handle fails the build
+# rather than silently shipping a partial table.
+#
+# KNOWN LIMITATION: multi-line descriptions are truncated to their first
+# sentence, so qualifications living in later sentences do not reach the table
+# (tokenFile's "must be readable by the service user", postOnly's "requires
+# allowedChatIds", hardening's override guidance). The table is an index of
+# what exists with a one-line gloss; the declaration remains the full text.
+# Put the load-bearing sentence first if it must appear here.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -74,8 +82,24 @@ emit() { # $1 = file, $2 = label
   echo
   echo '| option | default | description |'
   echo '|--------|---------|-------------|'
-  echo '| `enable` | `false` | Enable the daemon. |'
-  echo '| `package` | the flake'"'"'s `telegram-bot-rs` | Package providing `bin/tg-bot`. |'
+  # enable/package are declared with mkEnableOption / mkPackageOption, whose
+  # shape the mkOption parser doesn't cover. Confirm each is actually declared
+  # before claiming it exists — a row for an option that isn't there is worse
+  # than a missing row, because a reader will try to set it.
+  if grep -q 'enable = mkEnableOption' "$1"; then
+    printf '| `enable` | `false` | %s |\n' \
+      "$(sed -n 's/.*mkEnableOption "\(.*\)";.*/\1/p' "$1" | head -1)"
+  else
+    echo "gen-module-options: no mkEnableOption in $1" >&2
+    exit 2
+  fi
+  if grep -q 'package = mkPackageOption' "$1"; then
+    printf '| `package` | `%s` | Package providing `bin/tg-bot`. |\n' \
+      "$(sed -n 's/.*mkPackageOption [^ ]* "\([^"]*\)".*/\1/p' "$1" | head -1)"
+  else
+    echo "gen-module-options: no mkPackageOption in $1" >&2
+    exit 2
+  fi
   opts_of "$1" | while IFS=$'\t' read -r n d desc; do
     [ -n "$d" ] || d="—"
     printf '| `%s` | `%s` | %s |\n' "$n" "$d" "$desc"
