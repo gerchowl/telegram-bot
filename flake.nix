@@ -298,6 +298,28 @@
                 bash ${./tests/e2e.sh}
                 touch "$out"
               '';
+          # tg-onboard drives sops/age for real against the mock API: the token it
+          # encrypts must decrypt back byte-identical, and no plaintext may be
+          # left on disk. Rust-only — onboarding is interactive, so the suite
+          # feeds every answer on stdin.
+          e2e-onboard =
+            pkgs.runCommand "telegram-bot-e2e-onboard"
+              {
+                nativeBuildInputs = [
+                  telegram-bot-rs
+                  pkgs.sops
+                  pkgs.age
+                  pkgs.python3
+                  pkgs.coreutils
+                  pkgs.gnugrep
+                  pkgs.bash
+                ];
+                TGB_MOCK = ./tests/mock.py;
+              }
+              ''
+                bash ${./tests/e2e-onboard.sh}
+                touch "$out"
+              '';
           # guardrails(local, dogfood): every Markdown surface must be generated, decorator-wrapped,
           # or whitelisted in guardrails-allow.txt — no hand-prose that silently drifts from the
           # code. Also runs the gate's own self-test (it must complain on prose, pass on wrapped).
