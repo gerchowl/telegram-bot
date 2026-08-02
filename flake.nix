@@ -16,6 +16,11 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     guardrails.url = "github:gerchowl/guardrails";
+    # Only used by checks.modules, to evaluate the Home-Manager module (#37).
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -24,6 +29,7 @@
       nixpkgs,
       flake-utils,
       guardrails,
+      home-manager,
     }:
     let
       inherit (nixpkgs) lib;
@@ -137,6 +143,136 @@
               !allFree
             ) ''echo "ERROR: a non-free dependency license was detected" >&2; exit 1''}
           '';
+        # Nothing else instantiates the modules, so a dangling package attr or a
+        # broken option would ship green — that is how the bash removal nearly
+        # left services.telegram-bot.package pointing at a deleted derivation
+        # (#37). Evaluate both modules and assert on what consumers depend on.
+        # The Home-Manager module is evaluated for BOTH platforms regardless of
+        # the host, so the darwin launchd branch is covered from Linux CI too.
+        #
+        # Scope: this asserts on the config the modules PRODUCE. Home-Manager
+        # rewrites ProgramArguments (wrapping it in wait4path) before writing
+        # the plist, so a regression inside Home-Manager's own wrapping is out
+        # of range — as is whether launchd actually accepts the job.
+        checkModules =
+          let
+            common = {
+              services.telegram-bot = {
+                enable = true;
+                tokenFile = "/run/secrets/tg";
+                chatId = 42;
+                postOnly = false;
+                allowedChatIds = [ 42 ];
+                commands.hello = "echo hi";
+              };
+            };
+            nixosSvc =
+              (nixpkgs.lib.nixosSystem {
+                system = "x86_64-linux";
+                modules = [
+                  self.nixosModules.telegram-bot
+                  common
+                  {
+                    boot.loader.grub.devices = [ "nodev" ];
+                    fileSystems."/" = {
+                      device = "/dev/null";
+                      fsType = "ext4";
+                    };
+                    system.stateVersion = "24.05";
+                  }
+                ];
+              }).config.systemd.services.telegram-bot;
+            hmFor =
+              sys:
+              (home-manager.lib.homeManagerConfiguration {
+                pkgs = nixpkgs.legacyPackages.${sys};
+                modules = [
+                  self.homeManagerModules.telegram-bot
+                  common
+                  {
+                    home = {
+                      username = "test";
+                      homeDirectory =
+                        if nixpkgs.legacyPackages.${sys}.stdenv.hostPlatform.isDarwin then "/Users/test" else "/home/test";
+                      stateVersion = "24.05";
+                      # home-manager tracks master while nixpkgs is pinned by
+                      # the lock; the mismatch warning is noise here.
+                      enableNixpkgsReleaseCheck = false;
+                    };
+                  }
+                ];
+              }).config;
+            hmLinux = hmFor "x86_64-linux";
+            hmDarwin = hmFor "aarch64-darwin";
+            linuxSvc = hmLinux.systemd.user.services.telegram-bot;
+            darwinAgent = hmDarwin.launchd.agents.telegram-bot.config;
+            # These strings reference store paths for foreign systems. This
+            # check asserts on how the modules EVALUATE, so drop the context —
+            # keeping it would make the derivation depend on building an
+            # x86_64-linux package, which no darwin runner can do.
+            noCtx = builtins.unsafeDiscardStringContext;
+            # ExecStart / ProgramArguments come back as a string from one module
+            # and a single-element list from the other; normalise both.
+            asStr = v: noCtx (if builtins.isList v then lib.concatStringsSep " " v else v);
+          in
+          pkgs.runCommand "telegram-bot-modules"
+            {
+              nixosExec = asStr nixosSvc.serviceConfig.ExecStart;
+              nixosCommands = asStr nixosSvc.environment.TELEGRAM_COMMANDS_DIR;
+              hmLinuxExec = asStr linuxSvc.Service.ExecStart;
+              hmLinuxEnv = asStr linuxSvc.Service.Environment;
+              hmLinuxHasAgent = lib.boolToString (hmLinux.launchd.agents ? telegram-bot);
+              hmDarwinExec = asStr darwinAgent.ProgramArguments;
+              hmDarwinCommands = asStr darwinAgent.EnvironmentVariables.TELEGRAM_COMMANDS_DIR;
+              hmDarwinOut = asStr darwinAgent.StandardOutPath;
+              hmDarwinKeepAlive = lib.boolToString darwinAgent.KeepAlive.SuccessfulExit;
+              hmDarwinRunAtLoad = lib.boolToString darwinAgent.RunAtLoad;
+              hmDarwinThrottle = toString darwinAgent.ThrottleInterval;
+              hmDarwinToken = asStr darwinAgent.EnvironmentVariables.TELEGRAM_BOT_TOKEN_FILE;
+              hmDarwinHasUnit = lib.boolToString (hmDarwin.systemd.user.services ? telegram-bot);
+            }
+            ''
+              fail=0
+              chk() { # name expected-suffix actual
+                case "$3" in
+                  *$2) echo "  PASS: $1" ;;
+                  *) echo "  FAIL: $1 — got '$3', want *$2"; fail=1 ;;
+                esac
+              }
+              eq() { if [ "$3" = "$2" ]; then echo "  PASS: $1"; else echo "  FAIL: $1 — got '$3', want '$2'"; fail=1; fi; }
+              has() { # name substring actual
+                case "$3" in
+                  *$2*) echo "  PASS: $1" ;;
+                  *) echo "  FAIL: $1 — got '$3', want to contain '$2'"; fail=1 ;;
+                esac
+              }
+
+              echo "== NixOS module =="
+              chk "ExecStart is the shipped tg-bot" "/bin/tg-bot" "$nixosExec"
+              chk "commands attrset builds a commands dir" "telegram-bot-commands" "$nixosCommands"
+
+              echo "== Home-Manager on linux =="
+              chk "systemd unit ExecStart" "/bin/tg-bot" "$hmLinuxExec"
+              has "commands attrset reaches the unit" "TELEGRAM_COMMANDS_DIR=/nix/store" "$hmLinuxEnv"
+              has "command timeout reaches the unit" "TELEGRAM_COMMAND_TIMEOUT=60" "$hmLinuxEnv"
+              has "allowlist reaches the unit" "TELEGRAM_ALLOWED_CHAT_IDS=42" "$hmLinuxEnv"
+              eq "no launchd agent on linux" "false" "$hmLinuxHasAgent"
+
+              echo "== Home-Manager on darwin =="
+              chk "launchd runs the shipped tg-bot" "/bin/tg-bot" "$hmDarwinExec"
+              chk "commands attrset reaches the agent" "telegram-bot-commands" "$hmDarwinCommands"
+              chk "stdout is captured to a log" "/telegram-bot.log" "$hmDarwinOut"
+              eq "restarts only on failure" "false" "$hmDarwinKeepAlive"
+              eq "starts at load" "true" "$hmDarwinRunAtLoad"
+              eq "respawn is throttled" "5" "$hmDarwinThrottle"
+              eq "tokenFile reaches the agent" "/run/secrets/tg" "$hmDarwinToken"
+              eq "no systemd unit on darwin" "false" "$hmDarwinHasUnit"
+
+              [ "$fail" -eq 0 ] || { echo "module checks FAILED"; exit 1; }
+              echo "all module checks passed"
+              touch "$out"
+            '';
+
       in
       {
         packages = {
@@ -177,6 +313,7 @@
         };
 
         checks = {
+          modules = checkModules;
           format = checkFormat;
           lint = checkLint;
           licenses = checkLicenses;
