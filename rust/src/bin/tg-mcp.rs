@@ -47,6 +47,23 @@ impl Ipc {
             Ipc::Tcp(s) => Ipc::Tcp(s.try_clone()?),
         })
     }
+
+    fn is_tcp(&self) -> bool {
+        matches!(self, Ipc::Tcp(_))
+    }
+
+    /// Where this request came from, as the DAEMON sees it. Derived from the
+    /// socket, never from the request body, so an agent cannot claim to be
+    /// somewhere it isn't — which is the whole point of showing it to a human.
+    fn peer_label(&self) -> String {
+        match self {
+            Ipc::Unix(_) => "local".to_string(),
+            Ipc::Tcp(s) => s
+                .peer_addr()
+                .map(|a| a.ip().to_string())
+                .unwrap_or_else(|_| "remote".to_string()),
+        }
+    }
 }
 impl Read for Ipc {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -99,6 +116,128 @@ fn hostname() -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "host".into())
+}
+
+/// The shared secret required on every TCP request, if configured.
+fn tcp_token() -> Option<String> {
+    std::env::var("TG_MCP_TOKEN").ok().filter(|s| !s.is_empty())
+}
+
+/// Compare two secrets without leaking their contents through timing. Length
+/// is not secret here (it's a config value), but the bytes are.
+fn secret_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    // black_box so the optimiser can't reason about the accumulator and turn
+    // this back into an early-exit compare.
+    std::hint::black_box(diff) == 0
+}
+
+/// Resolve once and return the address to bind, having checked EVERY candidate.
+///
+/// Validating one address and then handing the original string to
+/// `TcpListener::bind` would let bind re-resolve and land somewhere else: DNS
+/// order isn't stable, and bind walks the list on failure. So a name resolving
+/// to both a tailnet and a LAN address could validate on the former and bind
+/// the latter. Every candidate must pass, and the caller binds the concrete
+/// SocketAddr this returns.
+fn resolve_bind_addr(addr: &str) -> Result<std::net::SocketAddr, String> {
+    use std::net::ToSocketAddrs;
+    let addrs: Vec<_> = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("cannot parse as <addr:port>: {e}"))?
+        .collect();
+    let first = *addrs
+        .first()
+        .ok_or_else(|| "resolved to no address".to_string())?;
+    for sa in &addrs {
+        check_bind_addr(*sa)?;
+    }
+    Ok(first)
+}
+
+/// Reject a listen address that isn't a Tailscale address or loopback.
+///
+/// A BIND sanity check, not authorization — being in the CGNAT range proves the
+/// peer is on some tailnet, not that it is yours; the shared secret does the
+/// authorizing. What this stops is the one catastrophic misconfig: `0.0.0.0`,
+/// `::` or a LAN address puts a daemon that can message you as you on an
+/// interface anyone can reach.
+fn check_bind_addr(sa: std::net::SocketAddr) -> Result<(), String> {
+    use std::net::IpAddr;
+    match sa.ip() {
+        IpAddr::V4(v4) if v4.is_loopback() => Ok(()),
+        // Tailscale hands out 100.64.0.0/10 (CGNAT, RFC 6598).
+        IpAddr::V4(v4) if v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]) => Ok(()),
+        IpAddr::V4(v4) if v4.is_unspecified() => Err(format!(
+            "{v4} is a wildcard — this would accept connections on every interface"
+        )),
+        IpAddr::V6(v6) if v6.is_loopback() => Ok(()),
+        IpAddr::V6(v6) if v6.is_unspecified() => Err(format!(
+            "{v6} is a wildcard — this would accept connections on every interface"
+        )),
+        // Tailscale's IPv6 range is fd7a:115c:a1e0::/48.
+        IpAddr::V6(v6) if v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0] => Ok(()),
+        ip => Err(format!(
+            "{ip} is neither a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) nor loopback"
+        )),
+    }
+}
+
+/// Asks that must not be answerable with one distracted tap. An agent that
+/// ingested a poisoned README can phrase a plausible `ask`; the authenticated
+/// client IS the attacker in that case, so no amount of transport auth helps.
+/// For this phrasing class we drop the buttons and require a typed reply.
+///
+/// Scans EVERY string the human will see, not just the question. The button
+/// label is what people actually read, so checking only the question missed the
+/// obvious evasion: `question: "Proceed?"` with `options: ["Force push to
+/// main", "Cancel"]`.
+///
+/// Be clear about what this is: a speed bump for phrasings that read as
+/// destructive, not a boundary. It is a denylist, so a determined injection can
+/// word its way around it ("purge the customer records"). It is here to catch
+/// the careless and the obvious, and it deliberately errs toward friction — a
+/// benign question mentioning production loses its buttons, which costs one
+/// typed reply. The real control is that irreversible actions should not be
+/// reachable by a single tap at all.
+fn is_destructive(parts: &[&str]) -> bool {
+    let q = parts.join(" \u{1}").to_lowercase();
+    [
+        "--force",
+        "-f ",
+        "force push",
+        "force-push",
+        "rm -rf",
+        "drop table",
+        "drop database",
+        "truncate",
+        "delete from",
+        "delete all",
+        "overwrite",
+        "purge",
+        "deploy to prod",
+        "deploy prod",
+        "to prod",
+        "production",
+        "reset --hard",
+        "push to main",
+        "push to master",
+        "revoke",
+        "rotate the",
+        "wipe",
+        "destroy",
+        "format /",
+        "shutdown",
+    ]
+    .iter()
+    .any(|needle| q.contains(needle))
 }
 
 fn html_escape(s: &str) -> String {
@@ -184,10 +323,31 @@ fn run_daemon() -> Result<()> {
     }
 
     // Optional TCP listener — remote agents over the tailnet (central mode).
-    // TG_MCP_LISTEN=<addr:port>, e.g. the host's tailnet IP so only the tailnet
-    // can reach it. The wire protocol is identical to the Unix socket.
+    // TG_MCP_LISTEN=<addr:port>, bound to the host's tailnet IP.
     if let Ok(addr) = std::env::var("TG_MCP_LISTEN") {
-        match TcpListener::bind(&addr) {
+        // Two gates before this port opens, both fail-closed. A daemon that can
+        // send Telegram messages as you must never end up on a LAN or public
+        // interface, and it must never accept an unidentified peer.
+        let bind_to = match resolve_bind_addr(&addr) {
+            Ok(sa) => sa,
+            Err(why) => {
+                eprintln!(
+                    "tg-mcp daemon: REFUSING to listen on {addr}: {why}\n  \
+                     Bind to this host's Tailscale address. Unix socket still served."
+                );
+                return run_poll_loop(&router);
+            }
+        };
+        if tcp_token().is_none() {
+            eprintln!(
+                "tg-mcp daemon: REFUSING to listen on {addr}: TG_MCP_LISTEN is set but \
+                 TG_MCP_TOKEN is not.\n  \
+                 The TCP transport has no other authentication — set a shared secret on \
+                 the daemon and every remote client. Unix socket still served."
+            );
+            return run_poll_loop(&router);
+        }
+        match TcpListener::bind(bind_to) {
             Ok(tl) => {
                 eprintln!("tg-mcp daemon: TCP listening on {addr}");
                 let router = router.clone();
@@ -206,7 +366,14 @@ fn run_daemon() -> Result<()> {
         }
     }
 
-    // Poll loop (main thread) — the single Telegram update consumer.
+    run_poll_loop(&router)
+}
+
+/// The single Telegram update consumer. Runs on the main thread and never
+/// returns; factored out so the daemon can still serve the Unix socket after
+/// refusing to open an unsafe TCP listener.
+fn run_poll_loop(router: &Arc<Router>) -> Result<()> {
+    let tg = &router.tg;
     let mut offset: i64 = 0;
     loop {
         let resp = match tg.get_updates_allowed(offset, 50, r#"["message","callback_query"]"#) {
@@ -222,7 +389,7 @@ fn run_daemon() -> Result<()> {
                 if let Some(uid) = upd.get("update_id").and_then(Value::as_i64) {
                     offset = uid + 1;
                 }
-                route_update(upd, &router);
+                route_update(upd, router);
             }
         }
     }
@@ -315,6 +482,8 @@ const MAX_IPC: u64 = 80_000_000;
 /// One IPC request per connection: a single JSON object line in, one out.
 fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
     let mut writer = stream.try_clone()?;
+    let is_tcp = stream.is_tcp();
+    let peer = stream.peer_label();
     // Bound the read. read_line grows until a newline or EOF, and the TCP
     // listener is unauthenticated — any tailnet peer could otherwise stream
     // newline-free bytes until the daemon is OOM-killed. Pre-existing, but
@@ -327,6 +496,42 @@ fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
         bail!("ipc request exceeded {MAX_IPC} bytes");
     }
     let req: Value = serde_json::from_str(line.trim()).context("parsing ipc request")?;
+
+    // Remote requests must carry the shared secret. The Unix socket is exempt:
+    // filesystem permissions already bound it to the local user, and adding a
+    // secret there would only put one more copy of it on disk.
+    //
+    // Honest about what this is: the token and tailnet membership share a
+    // compromise domain, so this does NOT defend against a compromised fleet
+    // node. It closes the narrower case of a node admitted to the tailnet later,
+    // or an ACL that is wrong — Tailscale falls back to allow-all on an empty
+    // policy file. Defence in depth, not a trust boundary.
+    if is_tcp {
+        let want = match tcp_token() {
+            Some(t) => t,
+            // Unreachable: the listener refuses to open without a token.
+            None => {
+                let _ = writeln!(
+                    writer,
+                    "{}",
+                    json!({"error": "server has no token configured"})
+                );
+                bail!("tcp request with no server token configured");
+            }
+        };
+        let got = req.get("token").and_then(|v| v.as_str()).unwrap_or("");
+        if !secret_eq(got, &want) {
+            eprintln!("tg-mcp daemon: REJECTED unauthenticated request from {peer}");
+            // Reply and return cleanly rather than bailing: erroring out drops
+            // the stream immediately, and the client can lose the response to
+            // an abortive close before it reads it. The peer should learn it
+            // was rejected, not just see the connection vanish.
+            writeln!(writer, "{}", json!({"error": "unauthorized"}))?;
+            writer.flush()?;
+            return Ok(());
+        }
+    }
+
     let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
     match op {
@@ -398,9 +603,29 @@ fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
                 .unwrap_or("")
                 .to_string();
 
+            // A question phrased around an irreversible action must not be
+            // answerable by one distracted tap on a lockscreen: the button
+            // label is what people actually read, and a prompt-injected agent
+            // on an authorised host can choose both. Strip the buttons and make
+            // the human type — the friction IS the mitigation.
+            let question = req.get("question").and_then(|v| v.as_str()).unwrap_or("");
+            let recommendation = req
+                .get("recommendation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut scan: Vec<&str> = vec![question, recommendation, default.as_str()];
+            scan.extend(options.iter().map(String::as_str));
+            let destructive = is_destructive(&scan);
+            let options: Vec<String> = if destructive { Vec::new() } else { options };
+
             let tok = next_token();
             let (tx, rx) = mpsc::channel::<String>();
-            let text = compose_ask_text(&req, &options, timeout, &default);
+            let mut text = compose_ask_text(&req, &options, timeout, &default, &peer);
+            if destructive {
+                text.push_str(
+                    "\n\n\u{26a0}\u{fe0f} <b>irreversible-sounding</b> — buttons withheld.                      Reply to this message with your answer to confirm.",
+                );
+            }
             let markup = if options.is_empty() {
                 None
             } else {
@@ -457,6 +682,10 @@ fn handle_ipc(stream: Ipc, r: &Router) -> Result<()> {
             json!({"error": format!("unknown op {other}")})
         )?,
     }
+    // Flush before the stream drops. Over TCP an abortive close can discard a
+    // response the peer never got to read — the request has already had its
+    // effect by then, so the client would report a failure that did happen.
+    writer.flush()?;
     Ok(())
 }
 
@@ -467,7 +696,13 @@ fn cleanup(r: &Router, tok: u64) {
     r.msg2tok.lock().unwrap().retain(|_, v| *v != tok);
 }
 
-fn compose_ask_text(req: &Value, options: &[String], timeout: u64, default: &str) -> String {
+fn compose_ask_text(
+    req: &Value,
+    options: &[String],
+    timeout: u64,
+    default: &str,
+    peer: &str,
+) -> String {
     let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("");
     let question = req.get("question").and_then(|v| v.as_str()).unwrap_or("");
     let ident = if label.is_empty() {
@@ -495,6 +730,10 @@ fn compose_ask_text(req: &Value, options: &[String], timeout: u64, default: &str
             html_escape(default)
         ));
     }
+    // `label` above is agent-supplied and can claim anything. This line is the
+    // daemon's own view of the connection, so it is the only part of the
+    // message that cannot lie about where the request came from.
+    s.push_str(&format!("\n<i>via</i> <code>{}</code>", html_escape(peer)));
     s
 }
 
@@ -576,10 +815,20 @@ fn run_mcp() -> Result<()> {
     Ok(())
 }
 
-fn ipc_call(req: Value) -> Result<Value> {
+fn ipc_call(mut req: Value) -> Result<Value> {
     // TG_MCP_REMOTE=<host:port> → talk to the central daemon over the tailnet;
     // otherwise the local Unix socket.
     let stream = if let Ok(remote) = std::env::var("TG_MCP_REMOTE") {
+        // Remote requests carry the shared secret; the daemon rejects them
+        // without it. Local ones don't — the socket's permissions are the
+        // control there, and a second copy of the secret would only be one
+        // more thing to leak.
+        match tcp_token() {
+            Some(t) => req["token"] = json!(t),
+            None => {
+                bail!("TG_MCP_REMOTE is set but TG_MCP_TOKEN is not — the daemon will reject this")
+            }
+        }
         Ipc::Tcp(
             TcpStream::connect(&remote)
                 .with_context(|| format!("connect tg-mcp daemon at {remote}"))?,

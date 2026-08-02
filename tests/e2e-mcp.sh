@@ -39,8 +39,31 @@ fi; }
 absent() { if grep -qF "$2" "$3"; then no "$1 ('$2' present)"; else ok "$1"; fi; }
 
 # One JSON-RPC call through a fresh stdio client; prints the response.
-rpc() { # $1 = json request
+rpc() { # $1 = json request (env may be set by the caller)
   printf '%s\n' "$1" | tg-mcp 2>/dev/null
+}
+
+# Send one raw IPC line over TCP and print the reply. Reads until the newline
+# rather than taking a single recv(): TCP is a byte stream and the reply really
+# does arrive fragmented sometimes — an earlier version of this helper caught a
+# lone "{" and failed intermittently. The Rust client uses read_line and was
+# never affected.
+tcp_send() { # $1 = port, $2 = json line
+  python3 - "$1" "$2" <<'PY'
+import socket, sys
+port, payload = int(sys.argv[1]), sys.argv[2].encode() + b"\n"
+s = socket.create_connection(("127.0.0.1", port), timeout=10)
+s.settimeout(10)
+s.sendall(payload)
+buf = b""
+while not buf.endswith(b"\n"):
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    buf += chunk
+s.close()
+sys.stdout.write(buf.decode(errors="replace"))
+PY
 }
 
 python3 "$MOCK_PY" &
@@ -147,6 +170,111 @@ echo "== tg-mcp: with no root set, any readable path is allowed =="
 unset TG_MCP_MEDIA_ROOT
 rpc "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"send_file\",\"arguments\":{\"path\":\"$T/secret.txt\"}}}" >/dev/null
 want "unrestricted by default" '"method": "sendDocument"' "$MOCK_LOG"
+
+echo "== tg-mcp: the ask provenance footer is daemon-stamped =="
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"ask","arguments":{"question":"ship it?","options":["yes","no"],"default":"no","timeout_s":2}}}' >/dev/null
+want "ask carries a via line" 'via' "$MOCK_LOG"
+want "local requests are labelled local" 'local' "$MOCK_LOG"
+# An agent cannot set `label` at all — the client overwrites it from
+# TG_MCP_LABEL, so it identifies the operator's config, not the caller.
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"ask","arguments":{"question":"ok?","label":"trusted-release-bot","options":["y"],"default":"n","timeout_s":2}}}' >/dev/null
+absent "an agent-supplied label is ignored" 'trusted-release-bot' "$MOCK_LOG"
+# And where the operator does set one, it is escaped rather than rendered.
+: >"$MOCK_LOG"
+TG_MCP_LABEL='</code> via <code>elsewhere' rpc '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"ask","arguments":{"question":"ok?","options":["y"],"default":"n","timeout_s":2}}}' >/dev/null
+absent "a label cannot inject markup into the via line" '</code> via <code>elsewhere' "$MOCK_LOG"
+want "it is escaped instead" '&lt;/code&gt;' "$MOCK_LOG"
+
+echo "== tg-mcp: destructive phrasing withholds the buttons =="
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"ask","arguments":{"question":"Rebase finished cleanly — push to main?","options":["Push","Cancel"],"default":"Cancel","timeout_s":2}}}' >/dev/null
+want "warns that it looks irreversible" 'irreversible-sounding' "$MOCK_LOG"
+absent "no inline keyboard offered" 'inline_keyboard' "$MOCK_LOG"
+want "asks for a typed reply instead" 'Reply to this message' "$MOCK_LOG"
+# The bypass that mattered: a harmless question with a destructive BUTTON.
+# Checking only the question missed this, which defeats the whole mitigation —
+# the label is what a distracted person reads and taps.
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"ask","arguments":{"question":"Proceed?","options":["Force push to main","Cancel"],"default":"Cancel","timeout_s":2}}}' >/dev/null
+absent "a destructive BUTTON also withholds the keyboard" 'inline_keyboard' "$MOCK_LOG"
+want "and says why" 'irreversible-sounding' "$MOCK_LOG"
+# Same for the default and the recommendation, which are rendered too.
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"ask","arguments":{"question":"Continue?","options":["ok"],"default":"rm -rf /var/lib","timeout_s":2}}}' >/dev/null
+absent "a destructive default is caught" 'inline_keyboard' "$MOCK_LOG"
+
+# A benign question keeps its buttons.
+: >"$MOCK_LOG"
+rpc '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"ask","arguments":{"question":"which colour?","options":["red","blue"],"default":"red","timeout_s":2}}}' >/dev/null
+want "benign asks keep their buttons" 'inline_keyboard' "$MOCK_LOG"
+
+echo "== tg-mcp: TCP requires the shared secret =="
+PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+export TG_MCP_SOCK2="$T/tcp.sock"
+env TELEGRAM_BOT_TOKEN=T TELEGRAM_CHAT_ID=42 TG_MCP_SOCK="$TG_MCP_SOCK2" \
+  TG_MCP_LISTEN="127.0.0.1:$PORT" TG_MCP_TOKEN=s3cret \
+  tg-mcp daemon >"$T/tcpd.log" 2>&1 &
+TCPD_PID=$!
+for _ in $(seq 1 50); do
+  grep -q "TCP listening" "$T/tcpd.log" && break
+  sleep 0.1
+done
+want "TCP listener came up" 'TCP listening' "$T/tcpd.log"
+
+: >"$MOCK_LOG"
+tcp_send "$PORT" '{"op":"notify","text":"authed","token":"s3cret"}' >"$T/ok.out" 2>&1
+want "correct token is accepted" '"ok"' "$T/ok.out"
+want "and the message is sent" 'authed' "$MOCK_LOG"
+
+: >"$MOCK_LOG"
+tcp_send "$PORT" '{"op":"notify","text":"WRONGTOKEN-PAYLOAD","token":"nope"}' >"$T/bad.out" 2>&1
+want "wrong token is rejected" 'unauthorized' "$T/bad.out"
+absent "and nothing reaches the chat" 'WRONGTOKEN-PAYLOAD' "$MOCK_LOG"
+want "the rejection is logged with the peer" 'REJECTED unauthenticated request' "$T/tcpd.log"
+
+: >"$MOCK_LOG"
+tcp_send "$PORT" '{"op":"notify","text":"NOTOKEN-PAYLOAD"}' >"$T/none.out" 2>&1
+want "a missing token is rejected" 'unauthorized' "$T/none.out"
+absent "and nothing reaches the chat" 'NOTOKEN-PAYLOAD' "$MOCK_LOG"
+kill $TCPD_PID 2>/dev/null
+
+echo "== tg-mcp: the bind guard fails closed =="
+for bad in "0.0.0.0" "192.168.1.10"; do
+  P2="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+  env TELEGRAM_BOT_TOKEN=T TELEGRAM_CHAT_ID=42 TG_MCP_SOCK="$T/g.sock" \
+    TG_MCP_LISTEN="$bad:$P2" TG_MCP_TOKEN=s3cret \
+    tg-mcp daemon >"$T/guard.log" 2>&1 &
+  GP=$!
+  for _ in $(seq 1 40); do
+    grep -q "REFUSING" "$T/guard.log" && break
+    sleep 0.1
+  done
+  want "refuses to bind $bad" 'REFUSING to listen' "$T/guard.log"
+  if python3 -c 'import socket,sys
+try:
+    socket.create_connection(("127.0.0.1",'"$P2"'),timeout=1).close(); sys.exit(0)
+except Exception: sys.exit(1)' 2>/dev/null; then
+    no "port $P2 is open despite the refusal"
+  else
+    ok "the port was never opened"
+  fi
+  kill $GP 2>/dev/null
+done
+
+echo "== tg-mcp: TG_MCP_LISTEN without a token refuses to listen =="
+P3="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+env TELEGRAM_BOT_TOKEN=T TELEGRAM_CHAT_ID=42 TG_MCP_SOCK="$T/n.sock" \
+  TG_MCP_LISTEN="127.0.0.1:$P3" tg-mcp daemon >"$T/notok.log" 2>&1 &
+NP=$!
+for _ in $(seq 1 40); do
+  grep -q "REFUSING" "$T/notok.log" && break
+  sleep 0.1
+done
+want "refuses an unauthenticated listener" 'TG_MCP_TOKEN is not' "$T/notok.log"
+want "and says the Unix socket still works" 'Unix socket still served' "$T/notok.log"
+kill $NP 2>/dev/null
 
 echo
 echo "RESULT: $pass passed, $fail failed"

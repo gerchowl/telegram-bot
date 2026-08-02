@@ -458,6 +458,59 @@ or a project `.mcp.json`):
 } } }
 ```
 
+#### Central mode is authenticated
+
+The TCP transport requires a shared secret. Set the same value on the daemon and
+on every remote client:
+
+```sh
+TG_MCP_LISTEN=100.x.y.z:8765  TG_MCP_TOKEN=…   # daemon
+TG_MCP_REMOTE=100.x.y.z:8765  TG_MCP_TOKEN=…   # client
+```
+
+Two things fail closed rather than degrading quietly, because the consequence
+is a daemon that can message you as you:
+
+- **`TG_MCP_LISTEN` without `TG_MCP_TOKEN`** — the TCP listener does not open.
+- **A bind address that is not a Tailscale address or loopback** — `0.0.0.0`,
+  `::` or a LAN IP is refused. A typo here would otherwise put the port on
+  every interface, silently.
+
+In both cases the Unix socket keeps working, so local agents are unaffected.
+
+Be clear about what the token is and isn't. It is **defence in depth against a
+mis-set ACL or a node you admit to the tailnet later** — Tailscale falls back to
+allow-all on an empty policy file. It is **not** a defence against a compromised
+fleet node: that machine has the token and the network position both. Restrict
+reachability with Tailscale ACLs as well; the token is the second lock, not the
+first. The Unix socket stays unauthenticated — filesystem permissions already
+bound it to you, and a second copy of the secret would only be one more thing
+to leak.
+
+#### `ask` and the human on the other end
+
+Every `ask` carries a `via` footer showing where the daemon saw the request come
+from — `local`, or the peer address. It is derived from the socket, not from the
+request, so an agent cannot claim to be somewhere it isn't.
+
+Asks phrased around irreversible actions (`--force`, `rm -rf`, `drop table`,
+`push to main`, `deploy prod`, …) are sent **without buttons** and require a
+typed reply. This is not about authentication: a coding agent ingests issue
+text, dependency READMEs and web pages, any of which can carry a prompt
+injection, and an injected agent on a fully authorised host can phrase a
+plausible question. The button label is what people actually read on a
+lockscreen. For actions that cannot be undone, the friction is the point.
+
+Every string the message renders is scanned — question, options, default and
+recommendation — not just the question. Checking only the question left the
+obvious hole: `"Proceed?"` with a `"Force push to main"` button.
+
+**Treat this as a speed bump, not a boundary.** It is a denylist, so a
+determined injection can word around it, and it deliberately errs toward
+friction — a benign question mentioning production loses its buttons, which
+costs you one typed reply. It catches the careless and the obvious. The real
+control is not making irreversible actions reachable by a single tap.
+
 #### Sending files
 
 `send_file` takes a `path`, an optional one-line `caption`, and `inline` (default

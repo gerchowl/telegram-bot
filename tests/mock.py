@@ -71,6 +71,10 @@ class H(BaseHTTPRequestHandler):
                      "text": (params.get("text") or [""])[0],
                      "caption": (params.get("caption") or [""])[0],
                      "parse_mode": (params.get("parse_mode") or [""])[0],
+                     # Logged so tests can assert on whether buttons were
+                     # offered; without it an "absent inline_keyboard" check
+                     # passes vacuously.
+                     "reply_markup": (params.get("reply_markup") or [""])[0],
                      "multipart": "_multipart" in params}
             logline(entry)
             return {"ok": True, "result": {"message_id": 1}}
