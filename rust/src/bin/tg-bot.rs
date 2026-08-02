@@ -16,11 +16,13 @@ use telegram_bot::{redact, resolve_token, Config, Tg};
 use wait_timeout::ChildExt;
 
 const TG_LIMIT: usize = 3900; // headroom under Telegram's 4096-char cap
-                              // Telegram's caption cap is 1024, counted in UTF-16 code units while we count
-                              // Unicode scalars — an emoji-heavy caption counts double there. Same headroom
-                              // approach as TG_LIMIT, so we split to a follow-up message before Telegram
-                              // rejects the upload outright.
+
+// Telegram's caption cap is 1024, counted in UTF-16 code units while we count
+// Unicode scalars — an emoji-heavy caption counts double there. Same headroom
+// approach as TG_LIMIT, so we split to a follow-up message before Telegram
+// rejects the upload outright.
 const CAPTION_LIMIT: usize = 900;
+
 const MAX_UPLOAD: u64 = 50_000_000; // Telegram's bot-API upload cap
 
 fn main() {
