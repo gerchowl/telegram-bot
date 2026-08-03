@@ -414,8 +414,15 @@ in pkgs.mkShell { packages = [ send ]; };
 <!-- guardrails-ok-begin: why bash was removed and what the closure costs — history, not state -->
 
 Every tool is one compiled Rust crate (`rust/`), built by the flake as
-`packages.telegram-bot-rs` — also `packages.default`, and `packages.telegram-bot`
-for consumers using the historical attr name.
+`packages.telegram-bot-rs`, also exposed as `packages.default`.
+
+**Upgrading from 0.1.x:** the per-tool attrs `packages.{tg-send,tg-bot,tg-poll,
+tg-onboard}` and the `packages.telegram-bot` join are gone — one derivation now
+ships all five binaries. There is deliberately no compatibility alias: the old
+names returned bash scripts and would now return compiled binaries, and at least
+one consumer was depending on that difference (a `pkill -x tg-bot` that matched
+a binary but not `bash …/tg-bot`). A missing attribute is a build error you
+read; a quietly changed one is an outage you debug.
 
 A bash implementation shipped alongside it until 0.2.0. It was removed once the
 Rust build reached parity: two implementations meant writing every feature twice
