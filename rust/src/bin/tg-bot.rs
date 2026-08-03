@@ -9,8 +9,10 @@
 //!     so glob/word-split/eval cannot happen by construction.
 
 use std::collections::HashSet;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use telegram_bot::{redact, resolve_token, Config, Tg};
 use wait_timeout::ChildExt;
@@ -86,6 +88,21 @@ fn run() -> anyhow::Result<()> {
         let resp = match tg.get_updates(offset, 50) {
             Ok(r) => r,
             Err(e) => {
+                // 401/404 mean the token is invalid, empty or revoked — a config
+                // error no amount of retrying fixes. Die so the supervisor
+                // reports it, rather than logging the same rejection forever in
+                // a system whose failure symptom is silence. Everything else
+                // (409 conflicts, 5xx, transport resets) is a blip: retry.
+                if let Some(api) = e.downcast_ref::<telegram_bot::ApiError>() {
+                    if api.is_auth_failure() {
+                        return Err(anyhow::anyhow!(
+                            "FATAL getUpdates {}: {} — the bot token is invalid or empty; \
+                             refusing to retry. Check token resolution (sops/age).",
+                            api.code,
+                            api.description
+                        ));
+                    }
+                }
                 eprintln!("tg-bot: getUpdates error: {}", redact(&format!("{e:#}")));
                 std::thread::sleep(Duration::from_secs(3));
                 continue;
@@ -504,7 +521,11 @@ fn spawn_capture(
         .args(argv)
         .current_dir(dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Own process group, so a timeout can kill the command AND anything it
+        // started. Killing just the child leaves grandchildren holding the
+        // stdout pipe, and the reads below would then never see EOF.
+        .process_group(0);
     for (k, v) in envs {
         builder.env(k, v);
     }
@@ -512,40 +533,81 @@ fn spawn_capture(
         Ok(c) => c,
         Err(e) => return (format!("failed to run {}: {e}", path.display()), false, 127),
     };
+    let pgid = child.id() as i32;
 
-    // Drain both pipes in threads so a chatty command can't deadlock on a full
-    // pipe buffer while we wait.
-    let mut so = child.stdout.take().expect("stdout piped");
-    let mut se = child.stderr.take().expect("stderr piped");
-    let th_o = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut so, &mut b);
-        b
-    });
-    let th_e = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut se, &mut b);
-        b
-    });
+    // Drain both pipes on threads so a chatty command can't deadlock on a full
+    // pipe buffer, and hand the results back over channels rather than by
+    // joining: a join is unbounded, and read_to_end only returns at EOF, which
+    // never comes while ANY process holds the write end. That is what wedged
+    // the daemon permanently (#47) — a command exiting instantly after leaving
+    // a background process behind was enough.
+    let so = child.stdout.take().expect("stdout piped");
+    let se = child.stderr.take().expect("stderr piped");
+    let (buf_o, rx_o) = drain(so);
+    let (buf_e, rx_e) = drain(se);
 
     let timed_out = match child.wait_timeout(Duration::from_secs(secs)) {
         Ok(Some(_)) => false,
-        Ok(None) => {
-            let _ = child.kill();
+        Ok(None) | Err(_) => {
+            kill_group(pgid);
             let _ = child.wait();
-            true
-        }
-        Err(_) => {
-            let _ = child.kill();
             true
         }
     };
     let rc = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
-    let o = th_o.join().unwrap_or_default();
-    let e = th_e.join().unwrap_or_default();
+
+    // The command has exited; its own output is already in flight. Wait only
+    // briefly for EOF. If it doesn't come, something it spawned still holds the
+    // pipe — take what arrived and kill the group so the fd is released rather
+    // than leaked. A command that legitimately starts a daemon must detach it
+    // (setsid/nohup with its own redirects), which closes the inherited pipe.
+    let grace = Duration::from_secs(2);
+    let eof_o = rx_o.recv_timeout(grace).is_ok();
+    let eof_e = rx_e.recv_timeout(grace).is_ok();
+    if !(eof_o && eof_e) {
+        // Something the command spawned still holds a pipe. Reap the group so
+        // the fd is released rather than leaked; cheap and harmless otherwise.
+        kill_group(pgid);
+    }
+    let o = std::mem::take(&mut *buf_o.lock().unwrap());
+    let e = std::mem::take(&mut *buf_e.lock().unwrap());
+
     let mut s = String::from_utf8_lossy(&o).into_owned();
     s.push_str(&String::from_utf8_lossy(&e));
     (s.trim_end().to_string(), timed_out, rc)
+}
+
+/// Read a pipe into a shared buffer, signalling on EOF.
+///
+/// Incremental rather than `read_to_end` so output the command already produced
+/// survives even when EOF never arrives — a grandchild holding the write end
+/// would otherwise cost us the whole reply, not just the wait.
+fn drain<R: std::io::Read + Send + 'static>(
+    mut r: R,
+) -> (Arc<Mutex<Vec<u8>>>, std::sync::mpsc::Receiver<()>) {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let sink = buf.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match r.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => sink.lock().unwrap().extend_from_slice(&chunk[..n]),
+            }
+        }
+        let _ = tx.send(());
+    });
+    (buf, rx)
+}
+
+/// SIGKILL a whole process group. The command runs in its own group, so this
+/// reaps anything it spawned; without it a grandchild survives and keeps the
+/// command's stdout pipe open forever.
+fn kill_group(pgid: i32) {
+    if pgid > 0 {
+        unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    }
 }
 
 fn run_with_timeout(path: &Path, argv: &[&str], chat: &str, cmd: &str, secs: u64) -> (String, i32) {

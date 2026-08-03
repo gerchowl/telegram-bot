@@ -353,6 +353,43 @@ run_bot_until 'sendDocument' $media_env
 want "parse_mode applies to the caption" '"parse_mode": "HTML"' "$MOCK_LOG"
 rm -f "$COMMANDS/report" "$COMMANDS/shot" "$COMMANDS/escape" "$COMMANDS/noroot" "$COMMANDS/vialink" "$COMMANDS/both" "$COMMANDS/prefix" "$COMMANDS/fifo" "$COMMANDS/crlf"
 
+echo "== tg-bot: a command that leaves a grandchild does not wedge the poll loop =="
+# #47: read_to_end returns only at EOF, and EOF needs EVERY writer to close the
+# pipe. A grandchild that inherited stdout keeps it open, so the drain never
+# finished and the daemon stopped polling forever — alive, silent, restart-only.
+# It did not even need the command timeout: this one exits instantly.
+printf '#!%s\nsleep 120 &\necho quick-reply\n' "$bash_path" >"$COMMANDS/leaky"
+chmod +x "$COMMANDS/leaky"
+printf '[{"update_id":1,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/leaky"}},{"update_id":2,"message":{"message_id":2,"chat":{"id":42,"type":"private"},"text":"/ping after-leak"}}]\n' >"$T/u.json"
+: >"$MOCK_LOG"
+start_mock "$T/u.json"
+run_bot_until 'pong after-leak' env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=0 TELEGRAM_ALLOWED_CHAT_IDS=42 TELEGRAM_COMMANDS_DIR="$COMMANDS" TELEGRAM_COMMAND_TIMEOUT=5
+# The assertion that matters: the NEXT update still gets processed.
+want "the loop keeps polling after a leaky command" 'pong after-leak' "$MOCK_LOG"
+# And the leaky command's own output is not lost to the bounded read.
+want "its output survives the bounded drain" 'quick-reply' "$MOCK_LOG"
+pkill -f 'sleep 120' 2>/dev/null
+rm -f "$COMMANDS/leaky"
+
+echo "== tg-bot: an invalid token is fatal, not retried forever =="
+# The bash daemon exited on 401/404; making Rust canonical (#38) silently lost
+# that, so a bad token meant a live process logging the same rejection forever.
+# In a notification system the symptom of failure is absence — it has to die so
+# the supervisor says so.
+: >"$MOCK_LOG"
+export MOCK_AUTH_FAIL=1
+start_mock
+if env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=1 tg-bot >"$T/auth.out" 2>&1; then
+  echo "  FAIL: should exit nonzero on 401"
+  fail=$((fail + 1))
+else
+  echo "  PASS: exits nonzero on 401"
+  pass=$((pass + 1))
+fi
+want "and says why" 'token is invalid or empty' "$T/auth.out"
+unset MOCK_AUTH_FAIL
+start_mock
+
 echo "== tg-bot: _poll_answer hook =="
 printf '#!%s\necho "vote $POLL_OPTIONS by $POLL_VOTER on $POLL_ID"\n' "$bash_path" >"$COMMANDS/_poll_answer"
 chmod +x "$COMMANDS/_poll_answer"

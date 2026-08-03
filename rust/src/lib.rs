@@ -171,6 +171,36 @@ pub fn resolve_token(cfg: &Config) -> Result<String> {
     bail!("no bot token found. Set TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_TOKEN_FILE or TELEGRAM_BOT_SOPS_FILE (run 'tg-onboard' to set up).");
 }
 
+/// A Bot API call that returned `ok: false`.
+///
+/// Typed rather than a formatted string so callers can act on the code: a 401
+/// or 404 means the token is wrong, which is a config error to die on, while a
+/// 409 or 5xx is a blip to retry. Matching on prose would break the moment
+/// Telegram reworded a message.
+#[derive(Debug)]
+pub struct ApiError {
+    pub code: i64,
+    pub description: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.code != 0 {
+            write!(f, "API error {}: {}", self.code, self.description)
+        } else {
+            write!(f, "API error: {}", self.description)
+        }
+    }
+}
+impl std::error::Error for ApiError {}
+
+impl ApiError {
+    /// A token that is invalid, empty or revoked. Retrying cannot fix it.
+    pub fn is_auth_failure(&self) -> bool {
+        self.code == 401 || self.code == 404
+    }
+}
+
 /// Minimal Telegram Bot API client.
 pub struct Tg {
     token: String,
@@ -202,11 +232,16 @@ impl Tg {
         if json.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
             Ok(json)
         } else {
-            let desc = json
+            let description = json
                 .get("description")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown error");
-            bail!("API error: {desc}");
+                .unwrap_or("unknown error")
+                .to_string();
+            let code = json
+                .get("error_code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            Err(ApiError { code, description }.into())
         }
     }
 

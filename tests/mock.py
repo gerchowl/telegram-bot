@@ -58,6 +58,11 @@ class H(BaseHTTPRequestHandler):
         if method == "deleteWebhook":
             return {"ok": True, "result": True}
         if method == "getUpdates":
+            # An invalid/revoked token. Retrying can never fix it, so the daemon
+            # must die rather than log the rejection forever (#47).
+            if os.environ.get("MOCK_AUTH_FAIL"):
+                return {"ok": False, "error_code": 401,
+                        "description": "Unauthorized"}
             offset = int((params.get("offset") or ["0"])[0])
             ups = [u for u in load_updates() if u["update_id"] >= offset]
             if not ups:

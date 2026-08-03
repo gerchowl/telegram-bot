@@ -26,6 +26,7 @@ anyhow = "1"
 wait-timeout = "0.2"
 rpassword = "7.5.4"
 base64 = "0.22"
+libc = "0.2.189"
 
 # Optimise for a small, self-contained binary — the whole point of v2.
 [profile.release]
