@@ -195,9 +195,12 @@ impl std::fmt::Display for ApiError {
 impl std::error::Error for ApiError {}
 
 impl ApiError {
-    /// A token that is invalid, empty or revoked. Retrying cannot fix it.
+    /// A token that is invalid, empty, revoked or disabled. Retrying cannot fix
+    /// it. 403 on getUpdates means BotFather disabled the bot — the same
+    /// unrecoverable class; 403 on a *send* is per-chat ("blocked by user") and
+    /// never reaches here.
     pub fn is_auth_failure(&self) -> bool {
-        self.code == 401 || self.code == 404
+        matches!(self.code, 401 | 403 | 404)
     }
 }
 

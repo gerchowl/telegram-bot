@@ -564,10 +564,26 @@ fn spawn_capture(
     let grace = Duration::from_secs(2);
     let eof_o = rx_o.recv_timeout(grace).is_ok();
     let eof_e = rx_e.recv_timeout(grace).is_ok();
-    if !(eof_o && eof_e) {
+    let leaked = !(eof_o && eof_e);
+    if leaked && !timed_out {
         // Something the command spawned still holds a pipe. Reap the group so
-        // the fd is released rather than leaked; cheap and harmless otherwise.
+        // the fd is released rather than leaked. Skipped when we already killed
+        // the group on timeout: the leader is reaped by then, so re-using its
+        // pid could in principle signal a recycled one, and anything still
+        // holding the pipe has escaped the group anyway (setsid).
         kill_group(pgid);
+    }
+    if leaked {
+        // Visible drift: each of these leaks a reader thread and an fd that the
+        // group kill cannot reclaim. Rare, but on a daemon up for weeks a
+        // command that does this on every call is a slow-motion version of the
+        // wedge this fix removed.
+        eprintln!(
+            "tg-bot: {} left a pipe open after exiting — output may be truncated, \
+             and a reader thread is leaked. Detach background work with setsid/nohup \
+             and redirect its stdio.",
+            path.display()
+        );
     }
     let o = std::mem::take(&mut *buf_o.lock().unwrap());
     let e = std::mem::take(&mut *buf_e.lock().unwrap());

@@ -379,7 +379,7 @@ echo "== tg-bot: an invalid token is fatal, not retried forever =="
 : >"$MOCK_LOG"
 export MOCK_AUTH_FAIL=1
 start_mock
-if env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=1 tg-bot >"$T/auth.out" 2>&1; then
+if timeout 15 env TELEGRAM_BOT_TOKEN=T TELEGRAM_POST_ONLY=1 tg-bot >"$T/auth.out" 2>&1; then
   echo "  FAIL: should exit nonzero on 401"
   fail=$((fail + 1))
 else
