@@ -277,8 +277,15 @@
       {
         packages = {
           inherit telegram-bot-rs;
-          # Historical attr name, kept so existing consumers keep resolving.
-          telegram-bot = telegram-bot-rs;
+          # No `telegram-bot` compatibility alias. It briefly existed so
+          # consumers of the old symlinkJoin kept resolving — but resolving is
+          # exactly the problem: the attr silently started returning compiled
+          # binaries where it used to return bash scripts, and a downstream host
+          # was relying on that difference (`pkill -x tg-bot` matched the Rust
+          # binary but not `bash …/tg-bot`, so one bot began killing another).
+          # A removed attr is a build error the consumer reads; a quietly
+          # changed one is an outage they debug. See gerchowl/g-fleet#43.
+          #
           # The compiled implementation is the artifact (#22): `nix run
           # github:gerchowl/telegram-bot#send` and friends resolve to binaries,
           # not a curl/jq/sops shell closure.
