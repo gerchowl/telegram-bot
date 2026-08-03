@@ -414,6 +414,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "libc",
  "rpassword",
  "serde_json",
  "ureq",

@@ -176,6 +176,24 @@ TELEGRAM_COMMANDS_DIR="$PWD/commands" \
 
 Then message `/deploy` from your chat. (See `commands/ping` and `commands/status`.)
 
+**Don't leave background processes holding the pipe.** A command runs in its own
+process group, and anything still holding its stdout/stderr shortly after it
+exits gets the group reaped. A bare `some-service &` is therefore killed a
+couple of seconds later. That is deliberate — a grandchild holding the pipe used
+to stop the daemon polling *permanently* (#47) — and the daemon logs when it
+happens.
+
+Redirect the background job's output and it keeps running:
+
+```sh
+nohup some-service >/var/log/some-service.log 2>&1 &
+```
+
+It is still in the command's process group, so if the *command* hits
+`TELEGRAM_COMMAND_TIMEOUT` the whole group is killed, background job included.
+For anything that must outlive the command regardless, hand it to a real
+supervisor (a launchd agent or systemd unit) instead of backgrounding it here.
+
 ### Sentinels: formatting and attachments
 
 A command can control how its reply is sent by emitting `\x01key=value` lines at
