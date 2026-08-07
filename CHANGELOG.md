@@ -6,7 +6,7 @@
 ### ⚠ BREAKING CHANGES
 
 * packages.telegram-bot no longer exists. Use packages.telegram-bot-rs or packages.default.
-* packages.tg-send, packages.tg-bot, packages.tg-onboard and packages.tg-poll no longer exist; use packages.telegram-bot-rs or the packages.telegram-bot alias. apps.send-rs / apps.bot-rs are gone — apps.send and apps.bot are the compiled binaries.
+* packages.tg-send, packages.tg-bot, packages.tg-onboard and packages.tg-poll no longer exist; use packages.telegram-bot-rs or packages.default. apps.send-rs / apps.bot-rs are gone — apps.send and apps.bot are the compiled binaries.
 
 ### Features
 
