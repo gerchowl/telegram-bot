@@ -8,6 +8,18 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "fix(deps)" # conventional commit -> release-please patch bump
+    ignore:
+      # base64 must track whatever ureq resolves, or the binary links two
+      # copies of it. ureq 2.12.1 AND the current 3.x both require ^0.22, so
+      # there is no version we can share by upgrading — taking 0.23 would
+      # duplicate it indefinitely for no functional gain (we only use STANDARD
+      # encode/decode, unchanged across these versions, and never pass base64
+      # types across the ureq boundary).
+      #
+      # Drop this entry the moment ureq's own requirement moves; that is the
+      # signal to bump both together.
+      - dependency-name: base64
+        versions: [">=0.23"]
 
   # Keep the pinned GitHub Actions current (and security-patched).
   - package-ecosystem: github-actions
